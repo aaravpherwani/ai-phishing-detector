@@ -36,4 +36,7 @@ if st.button("Check Message"):
             for exp in explanations:
                 st.write("- " + exp)
         else:
-            st.success("🟢 No phishing indicators detected. Message appears safe.")
+            if label == "SAFE":
+                st.success("🟢 No phishing indicators detected. Message appears safe.")
+            else:
+                st.warning("⚠️ The AI model flagged this as suspicious based on learned patterns, but no specific indicators were identified.")
