@@ -47,7 +47,6 @@ def generate_explanation(text, keyword_score, url_score, vt_results):
         if any(tld in domain for tld in [".xyz", ".top", ".click", ".tk"]):
             explanations.append("⚠️ Suspicious domain extension detected.")
 
-        # VirusTotal explanation for each URL
         if i < len(vt_results):
             vt = vt_results[i]
             if vt["error"] == "no_key":
@@ -85,7 +84,6 @@ def predict_message(text: str):
     keyword_score = features["keyword_score"]
     url_score = features["url_score"]
 
-    # Check ALL URLs with VirusTotal
     urls = extract_urls(text)
     vt_results = []
     total_vt_score = 0
@@ -113,16 +111,17 @@ def predict_message(text: str):
         proba = model.predict_proba(X)[0]
         safe_prob, phish_prob = proba[0], proba[1]
 
-        boost = min(rule_score * 0.05, 0.35)  # increased from 0.03/0.25
+        boost = min(rule_score * 0.05, 0.35)
 
-        if phish_prob >= 0.5 or rule_score >= 4:
+        if rule_score == 0:
+            label = "SAFE"
+            confidence = min(safe_prob + 0.10, 0.99)
+        elif phish_prob >= 0.5 or rule_score >= 4:
             label = "PHISHING"
             confidence = min(phish_prob + boost, 0.99)
-
         elif rule_score >= 2:
             label = "PHISHING"
-            confidence = min(0.65 + boost, 0.92)  # increased from 0.55/0.85
-
+            confidence = min(0.65 + boost, 0.92)
         else:
             label = "SAFE"
             confidence = min(safe_prob + 0.05, 0.99)
@@ -130,10 +129,10 @@ def predict_message(text: str):
     else:
         if rule_score >= 4:
             label = "PHISHING"
-            confidence = 0.95  # increased from 0.90
+            confidence = 0.95
         elif rule_score >= 2:
             label = "PHISHING"
-            confidence = 0.80  # increased from 0.70
+            confidence = 0.80
         else:
             label = "SAFE"
             confidence = 0.65
