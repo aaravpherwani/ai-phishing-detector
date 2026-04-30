@@ -13,9 +13,10 @@ def home():
 
 @app.post("/predict")
 def predict(msg: Message):
-    label, confidence, url_score = predict_message(msg.text)
+    label, confidence, url_score, explanations = predict_message(msg.text)
     return {
         "label": label,
         "confidence": confidence,
-        "url_score": url_score
+        "url_score": url_score,
+        "explanations": explanations
     }
