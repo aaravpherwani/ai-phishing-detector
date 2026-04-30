@@ -115,7 +115,7 @@ def predict_message(text: str):
 
         if rule_score == 0:
             label = "SAFE"
-            confidence = min(safe_prob + 0.10, 0.99)
+            confidence = max(min(safe_prob + 0.10, 0.99), 0.85)
         elif phish_prob >= 0.5 or rule_score >= 4:
             label = "PHISHING"
             confidence = min(phish_prob + boost, 0.99)
@@ -127,7 +127,10 @@ def predict_message(text: str):
             confidence = min(safe_prob + 0.05, 0.99)
 
     else:
-        if rule_score >= 4:
+        if rule_score == 0:
+            label = "SAFE"
+            confidence = 0.85
+        elif rule_score >= 4:
             label = "PHISHING"
             confidence = 0.95
         elif rule_score >= 2:
