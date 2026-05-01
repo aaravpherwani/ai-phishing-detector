@@ -25,31 +25,41 @@ def _is_meaningful(text: str, min_words: int = 8) -> bool:
     return len(words) >= min_words
 
 
-def _ocr_with_paddle(image_bytes: bytes) -> str:
-    """Run PaddleOCR on raw image bytes and return joined text."""
+def _ocr_with_tesseract(image_bytes: bytes) -> str:
+    """Run Tesseract OCR on raw image bytes and return extracted text."""
     try:
-        from paddleocr import PaddleOCR
-        import numpy as np
-        from PIL import Image
+        import pytesseract
+        from PIL import Image, ImageFilter, ImageEnhance
 
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        img_array = np.array(img)
 
-        ocr = PaddleOCR(use_angle_cls=True, lang="en", show_log=False)
-        result = ocr.ocr(img_array, cls=True)
+        # Preprocess: upscale small images, sharpen, boost contrast
+        # so Tesseract handles low-res screenshots better
+        w, h = img.size
+        if w < 1000:
+            scale = 1000 / w
+            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
 
-        lines = []
-        if result and result[0]:
-            for line in result[0]:
-                # Each line: [[box_coords], (text, confidence)]
-                text, confidence = line[1]
-                if confidence > 0.5:
-                    lines.append(text)
+        img = img.filter(ImageFilter.SHARPEN)
+        img = ImageEnhance.Contrast(img).enhance(1.5)
 
-        return "\n".join(lines).strip()
+        # PSM 6 = assume uniform block of text (good for email screenshots)
+        custom_config = r"--oem 3 --psm 6"
+        text = pytesseract.image_to_string(img, config=custom_config)
+        return text.strip()
 
     except ImportError:
-        return "[Error: PaddleOCR not installed. Run: pip install paddleocr paddlepaddle]"
+        return (
+            "[Error: pytesseract not installed. "
+            "Run: pip install pytesseract pillow  "
+            "and install Tesseract: https://github.com/tesseract-ocr/tesseract]"
+        )
+    except pytesseract.TesseractNotFoundError:
+        return (
+            "[Error: Tesseract binary not found. "
+            "Install it via 'sudo apt install tesseract-ocr' (Linux) "
+            "or 'brew install tesseract' (Mac).]"
+        )
     except Exception as e:
         return f"[OCR error: {e}]"
 
@@ -95,8 +105,8 @@ def _extract_selectable_text_from_image(image_bytes: bytes) -> str:
 def extract_text_from_image(file_bytes: bytes) -> tuple[str, str]:
     """
     Smart image text extraction:
-      1. Try selectable/embedded text metadata first.
-      2. If not meaningful, fall back to PaddleOCR.
+      1. Try selectable/embedded text metadata first (free, instant).
+      2. If not meaningful, fall back to Tesseract OCR (local, no API needed).
     Returns (extracted_text, method_used).
     """
     # Step 1 – selectable text
@@ -104,9 +114,9 @@ def extract_text_from_image(file_bytes: bytes) -> tuple[str, str]:
     if _is_meaningful(selectable):
         return selectable, "selectable text"
 
-    # Step 2 – PaddleOCR
-    ocr_text = _ocr_with_paddle(file_bytes)
-    return ocr_text, "PaddleOCR"
+    # Step 2 – Tesseract OCR
+    ocr_text = _ocr_with_tesseract(file_bytes)
+    return ocr_text, "Tesseract OCR"
 
 
 # --------------------------------------------------------------------------- #
@@ -178,7 +188,7 @@ if uploaded_file is not None:
         st.session_state.extracted_text = extracted
         method_emoji = {
             "selectable text": "🔍",
-            "PaddleOCR": "🤖",
+            "Tesseract OCR": "🤖",
             "email parser": "📧",
             "plain text": "📄",
         }.get(method, "✅")
