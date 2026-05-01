@@ -5,9 +5,49 @@ import email
 from email import policy
 import base64
 import io
+import re
+from html.parser import HTMLParser
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from backend.predict import predict_message
+
+
+class _HTMLTextExtractor(HTMLParser):
+    """Minimal HTML parser that strips tags and decodes entities."""
+    SKIP_TAGS = {"style", "script", "head"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self._skip = 0
+        self.chunks = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() in self.SKIP_TAGS:
+            self._skip += 1
+
+    def handle_endtag(self, tag):
+        if tag.lower() in self.SKIP_TAGS:
+            self._skip = max(0, self._skip - 1)
+        # Block-level tags → newline so words don't run together
+        if tag.lower() in {"p", "br", "div", "tr", "li", "h1", "h2", "h3", "h4"}:
+            self.chunks.append("\n")
+
+    def handle_data(self, data):
+        if self._skip == 0:
+            self.chunks.append(data)
+
+    def get_text(self):
+        raw = "".join(self.chunks)
+        # Collapse runs of whitespace / blank lines
+        raw = re.sub(r" {2,}", " ", raw)
+        raw = re.sub(r"\n{3,}", "\n\n", raw)
+        return raw.strip()
+
+
+def _html_to_text(html: str) -> str:
+    parser = _HTMLTextExtractor()
+    parser.feed(html)
+    return parser.get_text()
 
 st.set_page_config(page_title="AI Phishing Detector")
 st.title("🖲️ AI Phishing Detector")
@@ -81,28 +121,43 @@ def extract_text_from_file(uploaded_file):
         raw = file_bytes.decode("utf-8", errors="ignore")
         msg = email.message_from_string(raw, policy=policy.default)
 
-        parts = []
+        header_parts = []
         sender = msg.get("From", "")
         subject = msg.get("Subject", "")
         if sender:
-            parts.append(f"From: {sender}")
+            header_parts.append(f"From: {sender}")
         if subject:
-            parts.append(f"Subject: {subject}")
+            header_parts.append(f"Subject: {subject}")
 
-        if msg.is_multipart():
-            for part in msg.walk():
-                if part.get_content_type() == "text/plain":
-                    try:
-                        parts.append(part.get_content() or "")
-                    except Exception:
-                        pass
+        plain_parts = []
+        html_parts = []
+
+        walk = msg.walk() if msg.is_multipart() else [msg]
+        for part in walk:
+            ct = part.get_content_type()
+            if ct == "text/plain":
+                try:
+                    plain_parts.append(part.get_content() or "")
+                except Exception:
+                    pass
+            elif ct == "text/html":
+                try:
+                    html_parts.append(part.get_content() or "")
+                except Exception:
+                    pass
+
+        if plain_parts:
+            body = "\n".join(plain_parts).strip()
+        elif html_parts:
+            body = _html_to_text("\n".join(html_parts))
         else:
-            try:
-                parts.append(msg.get_content() or "")
-            except Exception:
-                pass
+            body = ""
 
-        return "\n".join(parts).strip(), "email parser"
+        result = "\n".join(header_parts)
+        if body:
+            result = (result + "\n\n" + body).strip()
+
+        return result, "email parser"
 
     # --- Image (PNG, JPG, JPEG, WEBP) ---
     if filename.endswith((".png", ".jpg", ".jpeg", ".webp")):
