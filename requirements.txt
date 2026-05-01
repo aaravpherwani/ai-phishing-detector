@@ -6,3 +6,5 @@ numpy
 requests
 datasets
 python-dotenv
+pytesseract
+Pillow
