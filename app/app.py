@@ -49,7 +49,7 @@ h1, h2, h3 { font-family: 'IBM Plex Mono', monospace; }
     letter-spacing: 0.05em;
 }
 .score-card {
-    background: #0d0d0d;
+    background: transparent;
     border: 1px solid #2a2a2a;
     border-radius: 8px;
     padding: 14px 18px;
@@ -60,13 +60,18 @@ h1, h2, h3 { font-family: 'IBM Plex Mono', monospace; }
     color: #888;
     text-transform: uppercase;
     letter-spacing: 0.1em;
-    font-family: 'IBM Plex Mono', monospace;
+    font-family: 'IBM Plex Sans', sans-serif;
 }
 .score-value {
     font-size: 1.8rem;
     font-weight: 600;
-    font-family: 'IBM Plex Mono', monospace;
+    font-family: 'IBM Plex Sans', sans-serif;
     margin: 4px 0 0 0;
+}
+.score-denom {
+    font-size: 0.9rem;
+    font-weight: 400;
+    color: #666;
 }
 .score-high  { color: #ff4444; }
 .score-med   { color: #ffaa00; }
@@ -301,20 +306,24 @@ if analyze_btn:
     kw  = scores["keyword_score"]
     us  = scores["url_score"]
     vts = scores["vt_score"]
-    overall = min(round((kw / 2) + us + vts, 1), 10)
 
-    for col, label_txt, val, max_v in [
-        (sc1, "Keyword Risk",   kw,      20),
-        (sc2, "URL Risk",       us,      10),
-        (sc3, "VirusTotal",     vts,     10),
-        (sc4, "Overall Risk",   overall, 10),
+    # Normalize keyword score to /10 (raw scale is ~0–20+)
+    kw_norm  = round(min(kw / 2, 10), 1)
+    overall  = round(min((kw_norm + us + vts) / 3, 10), 1)
+
+    for col, label_txt, val in [
+        (sc1, "Keyword Risk",  kw_norm),
+        (sc2, "URL Risk",      us),
+        (sc3, "VirusTotal",    vts),
+        (sc4, "Overall Risk",  overall),
     ]:
-        cls = _score_class(val, max_v)
+        cls = _score_class(val, 10)
         with col:
             st.markdown(
                 f'<div class="score-card">'
                 f'<div class="score-label">{label_txt}</div>'
-                f'<div class="score-value {cls}">{val}</div>'
+                f'<div class="score-value {cls}">{val}'
+                f'<span class="score-denom">/10</span></div>'
                 f'</div>',
                 unsafe_allow_html=True,
             )
@@ -325,7 +334,7 @@ if analyze_btn:
     with st.expander("📊 Feature Score Breakdown", expanded=True):
         import pandas as pd
         chart_data = pd.DataFrame({
-            "Score": [kw, us, vts],
+            "Score": [kw_norm, us, vts],
         }, index=["Keyword Risk", "URL Risk", "VirusTotal"])
         st.bar_chart(chart_data, use_container_width=True, height=180)
 
