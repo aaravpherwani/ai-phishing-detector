@@ -10,6 +10,15 @@ from html.parser import HTMLParser
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from backend.predict import predict_message
 
+# Check once at startup whether a Gemini key is configured
+try:
+    import streamlit as _st
+    GEMINI_KEY_SET = bool(
+        _st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+    )
+except Exception:
+    GEMINI_KEY_SET = bool(os.getenv("GEMINI_API_KEY"))
+
 st.set_page_config(
     page_title="PhishGuard AI",
     page_icon="🛡️",
@@ -399,8 +408,6 @@ if analyze_btn:
             f'</div>',
             unsafe_allow_html=True,
         )
-
-        # Key indicators from AI
         if ai_result["key_indicators"]:
             st.markdown(" ")
             pill_html = "".join(
@@ -408,22 +415,23 @@ if analyze_btn:
                 for ind in ai_result["key_indicators"]
             )
             st.markdown(pill_html, unsafe_allow_html=True)
-
         if ai_result["primary_threat"]:
             st.caption(f"Primary threat category: **{ai_result['primary_threat']}**")
 
-    elif ai_result["error"] == "no_key":
-        st.info(
-            "ℹ️ AI analysis unavailable — add a `GEMINI_API_KEY` to Streamlit secrets "
-            "to enable Gemini-powered explanations. Rule-based analysis shown above.",
-            icon="🔑",
-        )
-    elif ai_result["error"] == "rate_limited":
-        st.warning("⏱️ Gemini rate limit reached. Rule-based analysis shown above.")
-    elif not ai_result["used"]:
-        st.success(
-            "🟢 Message risk is below the AI analysis threshold — "
-            "rule engine found no significant indicators.",
-        )
     else:
-        st.info("ℹ️ AI analysis unavailable. Rule-based analysis shown above.")
+        err = ai_result.get("error")
+        if err == "no_key" or (not ai_result["used"] and not GEMINI_KEY_SET):
+            st.info(
+                "Add a **GEMINI_API_KEY** to your Streamlit secrets to enable "
+                "AI-powered explanations. Rule-based analysis is shown above.",
+                icon="🔑",
+            )
+        elif err == "rate_limited":
+            st.warning("⏱️ Gemini rate limit reached. Rule-based analysis shown above.")
+        elif not ai_result["used"]:
+            st.success(
+                "🟢 Risk is below the AI analysis threshold — "
+                "rule engine found no significant indicators.",
+            )
+        else:
+            st.warning(f"⚠️ AI analysis failed ({err or 'unknown error'}). Rule-based analysis shown above.")
