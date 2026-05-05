@@ -117,6 +117,18 @@ def predict_message(text: str):
     # --- ML model prediction ---
     rule_score = keyword_score + total_url_score
 
+    # Rule-score-based confidence ceiling and floor.
+    # The ML model alone can be over-confident on phishing-flavoured language
+    # even when hard evidence (URLs, VT hits, keyword density) is low.
+    # We cap confidence by how much corroborating evidence the rules found.
+    def _confidence_ceiling(rs: float) -> float:
+        """Max confidence we allow at a given rule score."""
+        if rs == 0:   return 0.60   # ML says phishing but zero rule evidence → soft flag
+        if rs <= 2:   return 0.72
+        if rs <= 4:   return 0.84
+        if rs <= 7:   return 0.93
+        return 0.99
+
     if model and vectorizer:
         tfidf_vec = vectorizer.transform([text])
         X = hstack([
@@ -126,27 +138,27 @@ def predict_message(text: str):
         ])
         proba = model.predict_proba(X)[0]
         safe_prob, phish_prob = proba[0], proba[1]
-        boost = min(rule_score * 0.05, 0.35)
 
-        if rule_score == 0:
-            label = "SAFE"
-            confidence = max(min(safe_prob + 0.10, 0.99), 0.85)
-        elif phish_prob >= 0.5 or rule_score >= 4:
+        ceiling = _confidence_ceiling(rule_score)
+
+        if phish_prob >= 0.5 or rule_score >= 2:
             label = "PHISHING"
-            confidence = min(phish_prob + boost, 0.99)
-        elif rule_score >= 2:
-            label = "PHISHING"
-            confidence = min(0.65 + boost, 0.92)
+            # Blend ML probability with rule evidence; cap by ceiling
+            raw = (phish_prob * 0.55) + (min(rule_score / 15, 1.0) * 0.45)
+            confidence = min(raw, ceiling)
         else:
             label = "SAFE"
-            confidence = min(safe_prob + 0.05, 0.99)
+            # Safe confidence can be high when both ML and rules agree it's clean
+            confidence = min(safe_prob + 0.05, 0.97)
     else:
         if rule_score == 0:
             label, confidence = "SAFE", 0.85
-        elif rule_score >= 4:
+        elif rule_score >= 8:
             label, confidence = "PHISHING", 0.95
+        elif rule_score >= 4:
+            label, confidence = "PHISHING", 0.82
         elif rule_score >= 2:
-            label, confidence = "PHISHING", 0.80
+            label, confidence = "PHISHING", 0.70
         else:
             label, confidence = "SAFE", 0.65
 
