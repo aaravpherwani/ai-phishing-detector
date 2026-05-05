@@ -7,7 +7,6 @@ All logic lives in the backend — the frontend just displays the result.
 import os
 import json
 import hashlib
-import time
 from functools import lru_cache
 
 try:
@@ -95,14 +94,14 @@ Output the paragraph first, then the JSON block. No other text."""
 
 
 MODELS = [
-    "gemini-2.0-flash",
-    "gemini-1.5-flash-8b",  # fallback — lighter, higher free RPM
+    "gemini-2.5-flash",       # primary — 10 RPM free tier
+    "gemini-2.5-flash-lite",  # fallback — 15 RPM, highest free throughput
 ]
 
 
 def _call_gemini(prompt: str) -> dict | None:
     """
-    Try each model in order. Retries once with backoff on 429.
+    Try each model in order. On 429 immediately tries next model (no sleep).
     Returns parsed result dict or None on failure.
     """
     if not GEMINI_API_KEY:
@@ -134,55 +133,47 @@ def _call_gemini(prompt: str) -> dict | None:
             method="POST",
         )
 
-        for attempt in range(2):  # 1 retry per model
-            try:
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
 
-                raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
+            raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
 
-                # Extract JSON block
-                brace_start = raw_text.rfind("{")
-                brace_end   = raw_text.rfind("}") + 1
-                json_match  = None
-                if brace_start != -1 and brace_end > brace_start:
-                    try:
-                        json_match = json.loads(raw_text[brace_start:brace_end])
-                    except json.JSONDecodeError:
-                        pass
+            brace_start = raw_text.rfind("{")
+            brace_end   = raw_text.rfind("}") + 1
+            json_match  = None
+            if brace_start != -1 and brace_end > brace_start:
+                try:
+                    json_match = json.loads(raw_text[brace_start:brace_end])
+                except json.JSONDecodeError:
+                    pass
 
-                paragraph = raw_text[:brace_start].strip() if brace_start != -1 else raw_text.strip()
+            paragraph = raw_text[:brace_start].strip() if brace_start != -1 else raw_text.strip()
 
-                if json_match:
-                    json_match["reasoning"] = json_match.get("reasoning") or paragraph
-                    json_match["model"] = model
-                    return json_match
+            if json_match:
+                json_match["reasoning"] = json_match.get("reasoning") or paragraph
+                json_match["model"] = model
+                return json_match
 
-                return {
-                    "verdict": None,
-                    "reasoning": paragraph,
-                    "key_indicators": [],
-                    "primary_threat": None,
-                    "confidence": None,
-                    "model": model,
-                    "error": "json_parse_failed",
-                }
+            return {
+                "verdict": None,
+                "reasoning": paragraph,
+                "key_indicators": [],
+                "primary_threat": None,
+                "confidence": None,
+                "model": model,
+                "error": "json_parse_failed",
+            }
 
-            except urllib.error.HTTPError as e:
-                if e.code == 429:
-                    if attempt == 0:
-                        time.sleep(3)  # wait 3s then retry same model
-                        continue
-                    break  # both attempts rate-limited → try next model
-                if e.code == 404:
-                    break  # model not found → try next
-                if e.code in (400, 401):
-                    return {"error": f"http_{e.code}"}
-                return {"error": f"http_{e.code}"}
-            except Exception as e:
-                return {"error": str(e)}
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                continue  # immediately try next model, no sleep
+            if e.code == 404:
+                continue  # model not found, try next
+            return {"error": f"http_{e.code}"}
+        except Exception as e:
+            return {"error": str(e)}
 
-    # All models exhausted
     return {"error": "rate_limited"}
 
 
