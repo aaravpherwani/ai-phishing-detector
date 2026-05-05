@@ -18,8 +18,9 @@ try:
 except Exception:
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# In-memory cache: hash(prompt) → result dict
+# In-memory cache: hash(prompt + model_version) → result dict
 _ai_cache: dict = {}
+_CACHE_VERSION = "v3"  # bump this to invalidate old cached results
 
 # Threshold: only invoke AI when combined rule score exceeds this
 AI_INVOKE_THRESHOLD = 2
@@ -119,7 +120,7 @@ def _call_gemini(prompt: str) -> dict | None:
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.2,
-                "maxOutputTokens": 512,
+                "maxOutputTokens": 1024,
             },
         }).encode("utf-8")
 
@@ -221,7 +222,7 @@ def get_ai_reasoning(
     prompt = _build_prompt(text, keyword_score, url_score, vt_results, url_analyses)
 
     # Cache by prompt hash
-    cache_key = hashlib.md5(prompt.encode()).hexdigest()
+    cache_key = hashlib.md5(f"{_CACHE_VERSION}:{prompt}".encode()).hexdigest()
     if cache_key in _ai_cache:
         cached = _ai_cache[cache_key].copy()
         cached["used"] = True
