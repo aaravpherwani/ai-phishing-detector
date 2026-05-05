@@ -94,9 +94,15 @@ Output the paragraph first, then the JSON block. No other text."""
     return prompt
 
 
+MODELS = [
+    "gemini-2.0-flash",
+    "gemini-1.5-flash-8b",  # fallback — lighter, higher free RPM
+]
+
+
 def _call_gemini(prompt: str) -> dict | None:
     """
-    Call Gemini 1.5 Flash via REST API.
+    Try each model in order. Retries once with backoff on 429.
     Returns parsed result dict or None on failure.
     """
     if not GEMINI_API_KEY:
@@ -105,73 +111,79 @@ def _call_gemini(prompt: str) -> dict | None:
     import urllib.request
     import urllib.error
 
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
-    )
+    for model in MODELS:
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model}:generateContent?key={GEMINI_API_KEY}"
+        )
+        payload = json.dumps({
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.2,
+                "maxOutputTokens": 512,
+            },
+        }).encode("utf-8")
 
-    payload = json.dumps({
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.2,
-            "maxOutputTokens": 512,
-        },
-    }).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": GEMINI_API_KEY,
+            },
+            method="POST",
+        )
 
-    req = urllib.request.Request(
-        url,
-        data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "x-goog-api-key": GEMINI_API_KEY,
-        },
-        method="POST",
-    )
+        for attempt in range(2):  # 1 retry per model
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
 
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        code = e.code
-        if code == 429:
-            return {"error": "rate_limited"}
-        if code == 400:
-            return {"error": "invalid_request"}
-        return {"error": f"http_{code}"}
-    except Exception as e:
-        return {"error": str(e)}
+                raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
 
-    try:
-        raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
-    except (KeyError, IndexError):
-        return {"error": "bad_response"}
+                # Extract JSON block
+                brace_start = raw_text.rfind("{")
+                brace_end   = raw_text.rfind("}") + 1
+                json_match  = None
+                if brace_start != -1 and brace_end > brace_start:
+                    try:
+                        json_match = json.loads(raw_text[brace_start:brace_end])
+                    except json.JSONDecodeError:
+                        pass
 
-    # Extract JSON block from response
-    json_match = None
-    brace_start = raw_text.rfind("{")
-    brace_end = raw_text.rfind("}") + 1
-    if brace_start != -1 and brace_end > brace_start:
-        try:
-            json_match = json.loads(raw_text[brace_start:brace_end])
-        except json.JSONDecodeError:
-            pass
+                paragraph = raw_text[:brace_start].strip() if brace_start != -1 else raw_text.strip()
 
-    # Extract paragraph (text before the JSON block)
-    paragraph = raw_text[:brace_start].strip() if brace_start != -1 else raw_text.strip()
+                if json_match:
+                    json_match["reasoning"] = json_match.get("reasoning") or paragraph
+                    json_match["model"] = model
+                    return json_match
 
-    if json_match:
-        json_match["reasoning"] = json_match.get("reasoning") or paragraph
-        return json_match
+                return {
+                    "verdict": None,
+                    "reasoning": paragraph,
+                    "key_indicators": [],
+                    "primary_threat": None,
+                    "confidence": None,
+                    "model": model,
+                    "error": "json_parse_failed",
+                }
 
-    # Fallback: couldn't parse JSON, return raw paragraph
-    return {
-        "verdict": None,
-        "reasoning": paragraph,
-        "key_indicators": [],
-        "primary_threat": None,
-        "confidence": None,
-        "error": "json_parse_failed",
-    }
+            except urllib.error.HTTPError as e:
+                if e.code == 429:
+                    if attempt == 0:
+                        time.sleep(3)  # wait 3s then retry same model
+                        continue
+                    break  # both attempts rate-limited → try next model
+                if e.code == 404:
+                    break  # model not found → try next
+                if e.code in (400, 401):
+                    return {"error": f"http_{e.code}"}
+                return {"error": f"http_{e.code}"}
+            except Exception as e:
+                return {"error": str(e)}
+
+    # All models exhausted
+    return {"error": "rate_limited"}
 
 
 def get_ai_reasoning(
@@ -257,6 +269,7 @@ def get_ai_reasoning(
         "confidence": result.get("confidence"),
         "primary_threat": result.get("primary_threat"),
         "key_indicators": result.get("key_indicators", []),
+        "model": result.get("model", "gemini"),
         "error": result.get("error") if "error" in result else None,
     }
 
