@@ -1,9 +1,3 @@
-"""
-ai_reasoning.py
-Gemini-powered reasoning layer. Only called for high-risk or ambiguous messages.
-All logic lives in the backend — the frontend just displays the result.
-"""
-
 import os
 import json
 import hashlib
@@ -23,7 +17,7 @@ except Exception:
 _ai_cache: dict = {}
 
 # Threshold: only invoke AI when combined rule score exceeds this
-AI_INVOKE_THRESHOLD = 3
+AI_INVOKE_THRESHOLD = 2
 
 
 def should_invoke_ai(keyword_score: int, url_score: float) -> bool:
