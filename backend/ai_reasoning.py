@@ -1,3 +1,9 @@
+"""
+ai_reasoning.py
+Gemini-powered reasoning layer. Only called for high-risk or ambiguous messages.
+All logic lives in the backend — the frontend just displays the result.
+"""
+
 import os
 import json
 import hashlib
@@ -101,7 +107,7 @@ def _call_gemini(prompt: str) -> dict | None:
 
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        f"gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
     )
 
     payload = json.dumps({
@@ -115,7 +121,10 @@ def _call_gemini(prompt: str) -> dict | None:
     req = urllib.request.Request(
         url,
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "x-goog-api-key": GEMINI_API_KEY,
+        },
         method="POST",
     )
 
