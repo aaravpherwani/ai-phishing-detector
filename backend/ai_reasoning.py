@@ -1,3 +1,9 @@
+"""
+ai_reasoning.py
+Gemini-powered reasoning layer. Only called for high-risk or ambiguous messages.
+All logic lives in the backend — the frontend just displays the result.
+"""
+
 import os
 import json
 import hashlib
@@ -148,10 +154,10 @@ def _call_gemini(prompt: str) -> dict | None:
             }
 
         except urllib.error.HTTPError as e:
-            if e.code == 429:
-                continue  # immediately try next model, no sleep
+            if e.code in (429, 503):
+                continue  # rate limited or overloaded → try next model
             if e.code == 404:
-                continue  # model not found, try next
+                continue  # model not found → try next
             return {"error": f"http_{e.code}"}
         except Exception as e:
             return {"error": str(e)}
