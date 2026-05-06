@@ -40,7 +40,17 @@ h1, h2, h3 { font-family: 'IBM Plex Mono', monospace; }
 .score-high  { color: #ff4444; }
 .score-med   { color: #ffaa00; }
 .score-low   { color: #00dd44; }
-.ai-box { border: 1px solid #1a3a6a; border-radius: 8px; padding: 18px 22px; line-height: 1.7; color: #c8d8f0; font-size: 0.95rem; }
+.ai-box {
+    border: 1px solid #1a3a6a;
+    border-radius: 8px;
+    padding: 18px 22px;
+    line-height: 1.7;
+    color: #1a2a3a;
+    font-size: 0.95rem;
+}
+@media (prefers-color-scheme: dark) {
+    .ai-box { color: #c8d8f0; }
+}
 .ai-badge { display: inline-block; color: #4d9fff; border: 1px solid #1a4a8a; border-radius: 4px; font-family: 'IBM Plex Mono', monospace; font-size: 0.65rem; letter-spacing: 0.12em; padding: 2px 8px; margin-bottom: 10px; text-transform: uppercase; }
 .indicator-pill { display: inline-block; border-radius: 4px; padding: 3px 10px; font-family: 'IBM Plex Mono', monospace; font-size: 0.72rem; margin: 3px 3px 3px 0; font-weight: 600; }
 .pill-danger { color: #ff5555; border: 1px solid #ff5555; }
@@ -192,11 +202,35 @@ if analyze_btn:
     # Bar chart — hidden when all zero, horizontal labels via transposed DataFrame
     if kw_norm > 0 or us > 0 or vts > 0:
         with st.expander("📊 Feature Score Breakdown", expanded=True):
-            import pandas as pd
-            chart_df = pd.DataFrame(
-                {"Keyword Risk": [kw_norm], "URL Risk": [us], "VirusTotal": [vts]}
-            )
-            st.bar_chart(chart_df, use_container_width=True, height=140)
+            import matplotlib.pyplot as plt
+            fig, ax = plt.subplots(figsize=(6, 2.5))
+            categories = ["Keyword Risk", "URL Risk", "VirusTotal"]
+            values     = [kw_norm, us, vts]
+            colors     = [
+                "#ff4444" if v >= 6 else "#ffaa00" if v >= 3 else "#00dd44"
+                for v in values
+            ]
+            bars = ax.bar(categories, values, color=colors, width=0.45, zorder=3)
+            ax.set_ylim(0, 10)
+            ax.set_ylabel("Score /10", fontsize=8, color="#888")
+            ax.tick_params(axis="x", labelsize=9)
+            ax.tick_params(axis="y", labelsize=8, colors="#888")
+            ax.set_facecolor("none")
+            fig.patch.set_alpha(0)
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            ax.spines["left"].set_color("#333")
+            ax.spines["bottom"].set_color("#333")
+            ax.yaxis.label.set_color("#888")
+            ax.tick_params(colors="#888")
+            ax.grid(axis="y", color="#333", linewidth=0.5, zorder=0)
+            for bar, val in zip(bars, values):
+                if val > 0:
+                    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.15,
+                            str(val), ha="center", va="bottom", fontsize=8, color="#888")
+            plt.tight_layout()
+            st.pyplot(fig, use_container_width=True)
+            plt.close(fig)
 
     # URL breakdown
     if url_analyses:
