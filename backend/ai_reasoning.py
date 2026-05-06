@@ -1,9 +1,3 @@
-"""
-ai_reasoning.py
-Gemini-powered reasoning layer. Only called for high-risk or ambiguous messages.
-All logic lives in the backend — the frontend just displays the result.
-"""
-
 import os
 import json
 import hashlib
@@ -20,7 +14,7 @@ except Exception:
 
 # In-memory cache: hash(prompt + model_version) → result dict
 _ai_cache: dict = {}
-_CACHE_VERSION = "v3"  # bump this to invalidate old cached results
+_CACHE_VERSION = "v4"  # bump this to invalidate old cached results
 
 # Threshold: only invoke AI when combined rule score exceeds this
 AI_INVOKE_THRESHOLD = 2
@@ -38,58 +32,43 @@ def _build_prompt(
     vt_results: list[dict],
     url_analyses: list[dict],
 ) -> str:
-    vt_summary = []
-    for i, vt in enumerate(vt_results):
-        url_label = url_analyses[i]["domain"] if i < len(url_analyses) else f"URL {i+1}"
-        if vt.get("error"):
-            vt_summary.append(f"- {url_label}: VirusTotal check failed ({vt['error']})")
-        else:
-            vt_summary.append(
-                f"- {url_label}: {vt['malicious']} malicious, "
-                f"{vt['suspicious']} suspicious, {vt['harmless']} harmless vendors"
-            )
-
-    url_summary = []
+    # Compact URL flags — only include triggered ones
+    url_lines = []
     for u in url_analyses:
         flags = []
-        if u["uses_ip"]:       flags.append("IP-based URL")
-        if u["is_shortened"]:  flags.append("URL shortener")
-        if u["suspicious_tld"]: flags.append(f"suspicious TLD ({u['tld']})")
-        if u["many_subdomains"]: flags.append(f"{u['subdomain_count']} subdomains")
-        if u["brand_spoof"]:   flags.append(f"possible {u['brand_spoof']} spoof")
-        if u["is_http"]:       flags.append("non-HTTPS")
-        flag_str = ", ".join(flags) if flags else "no major flags"
-        url_summary.append(f"- {u['domain']}: {flag_str}")
+        if u["uses_ip"]:          flags.append("IP-URL")
+        if u["is_shortened"]:     flags.append("shortener")
+        if u["suspicious_tld"]:   flags.append(f"bad-TLD{u['tld']}")
+        if u["many_subdomains"]:  flags.append(f"{u['subdomain_count']}-subdomains")
+        if u["brand_spoof"]:      flags.append(f"{u['brand_spoof']}-spoof")
+        if u["is_http"]:          flags.append("http-only")
+        if flags:
+            url_lines.append(f"{u['domain']}: {', '.join(flags)}")
 
-    prompt = f"""You are a cybersecurity expert analyzing a potentially malicious message.
+    vt_lines = []
+    for i, vt in enumerate(vt_results):
+        domain = url_analyses[i]["domain"] if i < len(url_analyses) else f"url{i+1}"
+        if not vt.get("error"):
+            if vt["malicious"] or vt["suspicious"]:
+                vt_lines.append(f"{domain}: {vt['malicious']}mal {vt['suspicious']}sus")
 
-MESSAGE:
-\"\"\"
-{text[:2000]}
-\"\"\"
+    context_parts = [f"keyword_risk={keyword_score} url_risk={url_score:.1f}"]
+    if url_lines:
+        context_parts.append("urls: " + "; ".join(url_lines))
+    if vt_lines:
+        context_parts.append("virustotal: " + "; ".join(vt_lines))
+    context = " | ".join(context_parts)
 
-AUTOMATED ANALYSIS SCORES:
-- Keyword risk score: {keyword_score}/20+ (higher = more phishing language)
-- URL risk score: {url_score:.1f}/10
+    prompt = f"""Cybersecurity analyst. Analyze this message for phishing/scams.
 
-URL ANALYSIS:
-{chr(10).join(url_summary) if url_summary else "- No URLs detected"}
+MESSAGE (first 800 chars): {text[:800]}
 
-VIRUSTOTAL RESULTS:
-{chr(10).join(vt_summary) if vt_summary else "- No URLs checked"}
+SCORES: {context}
 
-Your task:
-1. Write a clear, professional 2-4 sentence paragraph explaining WHY this message is or isn't suspicious. Write for a non-technical user. Do NOT use bullet points.
-2. Then provide a JSON block with this exact structure:
-{{
-  "verdict": "PHISHING" | "SUSPICIOUS" | "SAFE",
-  "confidence": 0.0-1.0,
-  "primary_threat": "brief threat category or null",
-  "key_indicators": ["indicator 1", "indicator 2"],  // max 3, each under 8 words
-  "reasoning": "same paragraph as above"
-}}
+Respond with ONLY this JSON (no other text, no markdown):
+{{"verdict":"PHISHING"|"SUSPICIOUS"|"SAFE","confidence":0.0-1.0,"primary_threat":"<5 words or null","key_indicators":["<6 words","<6 words"],"reasoning":"<2 sentences max, plain English, non-technical user"}}
 
-Output the paragraph first, then the JSON block. No other text."""
+Rules: reasoning max 40 words. key_indicators max 2 items. Be decisive."""
 
     return prompt
 
@@ -120,7 +99,7 @@ def _call_gemini(prompt: str) -> dict | None:
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.2,
-                "maxOutputTokens": 1024,
+                "maxOutputTokens": 300,
             },
         }).encode("utf-8")
 
@@ -138,9 +117,13 @@ def _call_gemini(prompt: str) -> dict | None:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
 
-            raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
+            raw_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
 
-            brace_start = raw_text.rfind("{")
+            # Strip markdown fences if model adds them anyway
+            raw_text = raw_text.replace("```json", "").replace("```", "").strip()
+
+            # Find outermost JSON object
+            brace_start = raw_text.find("{")
             brace_end   = raw_text.rfind("}") + 1
             json_match  = None
             if brace_start != -1 and brace_end > brace_start:
@@ -149,16 +132,14 @@ def _call_gemini(prompt: str) -> dict | None:
                 except json.JSONDecodeError:
                     pass
 
-            paragraph = raw_text[:brace_start].strip() if brace_start != -1 else raw_text.strip()
-
             if json_match:
-                json_match["reasoning"] = json_match.get("reasoning") or paragraph
                 json_match["model"] = model
                 return json_match
 
+            # Fallback: return raw text as reasoning if JSON failed
             return {
                 "verdict": None,
-                "reasoning": paragraph,
+                "reasoning": raw_text[:300],
                 "key_indicators": [],
                 "primary_threat": None,
                 "confidence": None,
