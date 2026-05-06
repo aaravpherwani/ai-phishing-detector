@@ -20,7 +20,7 @@ except Exception:
 
 # In-memory cache: hash(prompt + model_version) → result dict
 _ai_cache: dict = {}
-_CACHE_VERSION = "v7"
+_CACHE_VERSION = "v8"
 
 # Threshold: only invoke AI when combined rule score exceeds this
 AI_INVOKE_THRESHOLD = 2
@@ -63,16 +63,19 @@ def _build_prompt(
     if vt_lines:   context_parts.append("vt: " + "; ".join(vt_lines))
     context = " | ".join(context_parts)
 
-    prompt = f"""You are a cybersecurity analyst. Analyze this message.
+    prompt = f"""You are a cybersecurity analyst. Analyze this message for phishing or scams.
 
 MESSAGE: {text[:800]}
 
 SCORES: {context}
 
-Reply in this EXACT format — two lines, nothing else. Do NOT stop mid-sentence:
-
-EXPLANATION: <ONE complete sentence, max 25 words, plain English, must end with a period>
-JSON: {{"verdict":"PHISHING"|"SUSPICIOUS"|"SAFE","confidence":0.0-1.0,"primary_threat":"<4 words or null","key_indicators":["<5 words","<5 words"]}}"""
+Respond with a single JSON object. No other text.
+Fields:
+- verdict: "PHISHING", "SUSPICIOUS", or "SAFE"
+- confidence: number 0.0 to 1.0
+- primary_threat: string under 4 words, or null
+- key_indicators: array of exactly 2 strings, each under 5 words
+- reasoning: one sentence under 25 words explaining the verdict in plain English"""
 
     return prompt
 
@@ -104,6 +107,7 @@ def _call_gemini(prompt: str) -> dict | None:
             "generationConfig": {
                 "temperature": 0.2,
                 "maxOutputTokens": 400,
+                "response_mime_type": "application/json",
             },
         }).encode("utf-8")
 
@@ -122,26 +126,14 @@ def _call_gemini(prompt: str) -> dict | None:
                 data = json.loads(resp.read().decode("utf-8"))
 
             raw_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-
             raw_text = raw_text.replace("```json", "").replace("```", "").strip()
 
-            # Parse the two-line format: EXPLANATION: ... / JSON: ...
-            explanation = None
-            json_match  = None
-
-            for line in raw_text.splitlines():
-                line = line.strip()
-                if line.upper().startswith("EXPLANATION:"):
-                    explanation = line[len("EXPLANATION:"):].strip()
-                elif line.upper().startswith("JSON:"):
-                    json_str = line[len("JSON:"):].strip()
-                    try:
-                        json_match = json.loads(json_str)
-                    except json.JSONDecodeError:
-                        pass
-
-            # Fallback: if no labelled lines, try extracting bare JSON
-            if not json_match:
+            # With response_mime_type=application/json the whole response is JSON
+            json_match = None
+            try:
+                json_match = json.loads(raw_text)
+            except json.JSONDecodeError:
+                # Fallback: find outermost braces
                 brace_start = raw_text.find("{")
                 brace_end   = raw_text.rfind("}") + 1
                 if brace_start != -1 and brace_end > brace_start:
@@ -149,18 +141,14 @@ def _call_gemini(prompt: str) -> dict | None:
                         json_match = json.loads(raw_text[brace_start:brace_end])
                     except json.JSONDecodeError:
                         pass
-                # anything before the brace is the explanation
-                if not explanation and brace_start > 0:
-                    explanation = raw_text[:brace_start].strip()
 
             if json_match:
-                json_match["reasoning"] = explanation or json_match.get("reasoning")
                 json_match["model"] = model
                 return json_match
 
             return {
                 "verdict": None,
-                "reasoning": explanation or raw_text[:200],
+                "reasoning": raw_text[:200],
                 "key_indicators": [],
                 "primary_threat": None,
                 "confidence": None,
