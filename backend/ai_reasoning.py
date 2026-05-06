@@ -20,7 +20,7 @@ except Exception:
 
 # In-memory cache: hash(prompt + model_version) → result dict
 _ai_cache: dict = {}
-_CACHE_VERSION = "v5"
+_CACHE_VERSION = "v6"
 
 # Threshold: only invoke AI when combined rule score exceeds this
 AI_INVOKE_THRESHOLD = 2
@@ -59,22 +59,20 @@ def _build_prompt(
                 vt_lines.append(f"{domain}: {vt['malicious']}mal {vt['suspicious']}sus")
 
     context_parts = [f"keyword_risk={keyword_score} url_risk={url_score:.1f}"]
-    if url_lines:
-        context_parts.append("urls: " + "; ".join(url_lines))
-    if vt_lines:
-        context_parts.append("virustotal: " + "; ".join(vt_lines))
+    if url_lines:  context_parts.append("urls: " + "; ".join(url_lines))
+    if vt_lines:   context_parts.append("vt: " + "; ".join(vt_lines))
     context = " | ".join(context_parts)
 
-    prompt = f"""Cybersecurity analyst. Analyze this message for phishing/scams.
+    prompt = f"""You are a cybersecurity analyst. Analyze this message.
 
-MESSAGE (first 800 chars): {text[:800]}
+MESSAGE: {text[:800]}
 
 SCORES: {context}
 
-Respond with ONLY this JSON (no other text, no markdown):
-{{"verdict":"PHISHING"|"SUSPICIOUS"|"SAFE","confidence":0.0-1.0,"primary_threat":"<5 words or null","key_indicators":["<6 words","<6 words"],"reasoning":"<2 sentences max, plain English, non-technical user"}}
+Reply in this EXACT format — two lines, nothing else:
 
-Rules: reasoning max 40 words. key_indicators max 2 items. Be decisive."""
+EXPLANATION: <one plain-English sentence max 30 words explaining why suspicious or safe>
+JSON: {{"verdict":"PHISHING"|"SUSPICIOUS"|"SAFE","confidence":0.0-1.0,"primary_threat":"<4 words or null","key_indicators":["<5 words","<5 words"]}}"""
 
     return prompt
 
@@ -125,27 +123,44 @@ def _call_gemini(prompt: str) -> dict | None:
 
             raw_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
 
-            # Strip markdown fences if model adds them anyway
             raw_text = raw_text.replace("```json", "").replace("```", "").strip()
 
-            # Find outermost JSON object
-            brace_start = raw_text.find("{")
-            brace_end   = raw_text.rfind("}") + 1
+            # Parse the two-line format: EXPLANATION: ... / JSON: ...
+            explanation = None
             json_match  = None
-            if brace_start != -1 and brace_end > brace_start:
-                try:
-                    json_match = json.loads(raw_text[brace_start:brace_end])
-                except json.JSONDecodeError:
-                    pass
+
+            for line in raw_text.splitlines():
+                line = line.strip()
+                if line.upper().startswith("EXPLANATION:"):
+                    explanation = line[len("EXPLANATION:"):].strip()
+                elif line.upper().startswith("JSON:"):
+                    json_str = line[len("JSON:"):].strip()
+                    try:
+                        json_match = json.loads(json_str)
+                    except json.JSONDecodeError:
+                        pass
+
+            # Fallback: if no labelled lines, try extracting bare JSON
+            if not json_match:
+                brace_start = raw_text.find("{")
+                brace_end   = raw_text.rfind("}") + 1
+                if brace_start != -1 and brace_end > brace_start:
+                    try:
+                        json_match = json.loads(raw_text[brace_start:brace_end])
+                    except json.JSONDecodeError:
+                        pass
+                # anything before the brace is the explanation
+                if not explanation and brace_start > 0:
+                    explanation = raw_text[:brace_start].strip()
 
             if json_match:
+                json_match["reasoning"] = explanation or json_match.get("reasoning")
                 json_match["model"] = model
                 return json_match
 
-            # Fallback: return raw text as reasoning if JSON failed
             return {
                 "verdict": None,
-                "reasoning": raw_text[:300],
+                "reasoning": explanation or raw_text[:200],
                 "key_indicators": [],
                 "primary_threat": None,
                 "confidence": None,
