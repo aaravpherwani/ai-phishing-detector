@@ -203,7 +203,7 @@ if analyze_btn:
     if kw_norm > 0 or us > 0 or vts > 0:
         with st.expander("📊 Feature Score Breakdown", expanded=True):
             import matplotlib.pyplot as plt
-            fig, ax = plt.subplots(figsize=(4, 1.8))
+            fig, ax = plt.subplots(figsize=(4, 0.8))
             categories = ["Keyword Risk", "URL Risk", "VirusTotal"]
             values     = [kw_norm, us, vts]
             colors     = [
