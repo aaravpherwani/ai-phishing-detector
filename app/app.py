@@ -401,9 +401,10 @@ if analyze_btn:
 
     if ai_result["used"] and ai_result["reasoning"]:
         cached_note = " · cached" if ai_result.get("cached") else ""
+        model_name = ai_result.get("model", "gemini")
         st.markdown(
             f'<div class="ai-box">'
-            f'<div class="ai-badge">Gemini 1.5 Flash{cached_note}</div><br>'
+            f'<div class="ai-badge">{model_name}{cached_note}</div><br>'
             f'{ai_result["reasoning"]}'
             f'</div>',
             unsafe_allow_html=True,
