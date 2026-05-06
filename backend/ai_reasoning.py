@@ -20,7 +20,7 @@ except Exception:
 
 # In-memory cache: hash(prompt + model_version) → result dict
 _ai_cache: dict = {}
-_CACHE_VERSION = "v6"
+_CACHE_VERSION = "v7"
 
 # Threshold: only invoke AI when combined rule score exceeds this
 AI_INVOKE_THRESHOLD = 2
@@ -69,9 +69,9 @@ MESSAGE: {text[:800]}
 
 SCORES: {context}
 
-Reply in this EXACT format — two lines, nothing else:
+Reply in this EXACT format — two lines, nothing else. Do NOT stop mid-sentence:
 
-EXPLANATION: <one plain-English sentence max 30 words explaining why suspicious or safe>
+EXPLANATION: <ONE complete sentence, max 25 words, plain English, must end with a period>
 JSON: {{"verdict":"PHISHING"|"SUSPICIOUS"|"SAFE","confidence":0.0-1.0,"primary_threat":"<4 words or null","key_indicators":["<5 words","<5 words"]}}"""
 
     return prompt
@@ -103,7 +103,7 @@ def _call_gemini(prompt: str) -> dict | None:
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.2,
-                "maxOutputTokens": 300,
+                "maxOutputTokens": 400,
             },
         }).encode("utf-8")
 
@@ -266,6 +266,11 @@ def get_ai_reasoning(
         "model": result.get("model", "gemini"),
         "error": result.get("error") if "error" in result else None,
     }
+
+    # Drop reasoning that looks cut off (doesn't end with punctuation)
+    r = output.get("reasoning")
+    if r and not r.rstrip().endswith((".", "!", "?")):
+        output["reasoning"] = None
 
     _ai_cache[cache_key] = output
     return output
