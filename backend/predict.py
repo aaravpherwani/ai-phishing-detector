@@ -168,6 +168,27 @@ def predict_message(text: str):
         "vt_score": min(total_vt_score, 10),
     }
 
+    # --- AI confidence upgrade ---
+    # When AI has a strong, decisive verdict, blend it into the final confidence.
+    # This corrects cases where the ML is uncertain but the AI sees clear signal,
+    # or where the ML is over-confident but the AI reads it as safe.
+    if ai_result.get("used") and ai_result.get("confidence") is not None:
+        ai_conf = float(ai_result["confidence"])
+        ai_verdict = ai_result.get("verdict")
+
+        # Only apply upgrade when AI and ML agree on the direction
+        if ai_verdict == "PHISHING" and label == "PHISHING":
+            # Blend: 60% ML, 40% AI — AI can push confidence higher when warranted
+            confidence = round(min((confidence * 0.60) + (ai_conf * 0.40), 0.99), 2)
+        elif ai_verdict == "SAFE" and label == "SAFE":
+            confidence = round(min((confidence * 0.60) + (ai_conf * 0.40), 0.97), 2)
+        elif ai_verdict == "SAFE" and label == "PHISHING":
+            # AI disagrees — pull confidence down, change to SUSPICIOUS reading
+            confidence = round(min(confidence * 0.65, 0.70), 2)
+        elif ai_verdict == "SUSPICIOUS":
+            # AI is uncertain — moderate the confidence either way
+            confidence = round(min(confidence * 0.80, 0.78), 2)
+
     return (
         label,
         round(confidence, 2),
