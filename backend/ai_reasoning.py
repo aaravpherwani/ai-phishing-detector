@@ -1,3 +1,9 @@
+"""
+ai_reasoning.py
+Gemini-powered reasoning layer. Only called for high-risk or ambiguous messages.
+All logic lives in the backend — the frontend just displays the result.
+"""
+
 import os
 import json
 import hashlib
