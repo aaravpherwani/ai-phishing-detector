@@ -193,24 +193,23 @@ if analyze_btn:
     st.markdown(" ")
 
     # ── Risk scoring ─────────────────────────────────────────────────────────
-    # Weights: Language 30% · URL Structure 40% · External Intel 30%
-    # All components /10. Overall = weighted average → also /10.
+    # Three independent signal components, each /10.
+    # Confidence is computed separately by the ML model trained on real emails.
     kw      = scores["keyword_score"]
     us      = scores["url_score"]
     vts     = scores["vt_score"]
-    kw_norm = round(min(kw / 2, 10), 1)   # raw keyword score ~0-20 → /10
+    kw_norm = round(min(kw / 2, 10), 1)
 
     W_KW  = 0.30
     W_URL = 0.40
     W_VT  = 0.30
     overall = round((kw_norm * W_KW) + (us * W_URL) + (vts * W_VT), 1)
 
-    sc1, sc2, sc3, sc4 = st.columns(4)
+    sc1, sc2, sc3 = st.columns(3)
     for col, lbl, sublbl, val in [
-        (sc1, "Language",      "30% weight · rule-based",  kw_norm),
-        (sc2, "URL Structure", "40% weight · deterministic", us),
-        (sc3, "External Intel","30% weight · VirusTotal",   vts),
-        (sc4, "Overall Risk",  "weighted average",           overall),
+        (sc1, "Language",       "30% · phishing language",    kw_norm),
+        (sc2, "URL Structure",  "40% · link manipulation",    us),
+        (sc3, "External Intel", "30% · VirusTotal vendors",   vts),
     ]:
         cls = _score_class(val)
         with col:
@@ -221,15 +220,19 @@ if analyze_btn:
                 f'<div class="score-sublabel">{sublbl}</div>'
                 f'</div>',
                 unsafe_allow_html=True)
+    st.caption(
+        f"Signal score {overall}/10 (weighted average of the three components above) · "
+        f"Confidence ({confidence:.0%}) is separate — computed by the ML model trained on real phishing emails."
+    )
     st.markdown(" ")
 
     # Bar chart — hidden when all zero
     if kw_norm > 0 or us > 0 or vts > 0:
         with st.expander("📊 Risk Score Breakdown", expanded=True):
-            base_formula = f"Overall {overall}/10 = Language ({kw_norm} × 30%) + URL Structure ({us} × 40%) + External Intel ({vts} × 30%)"
+            base_formula = f"Language {kw_norm}/10 (30%) + URL Structure {us}/10 (40%) + External Intel {vts}/10 (30%) = Signal score {overall}/10"
             if ai_adjusted:
                 ai_conf_pct = round(float(ai_result.get("confidence", 0)) * 100)
-                base_formula += f"\nConfidence: {conf_pre_ai:.0%} (rule-based) → {confidence:.0%} after AI agreement ({ai_conf_pct}% AI confidence, 40% weight)"
+                base_formula += f"\nML confidence: {conf_pre_ai:.0%} → {confidence:.0%} after AI agreement ({ai_conf_pct}% AI confidence, 40% weight)"
             st.caption(base_formula)
             import matplotlib.pyplot as plt
             fig, ax = plt.subplots(figsize=(5, 1.4))
