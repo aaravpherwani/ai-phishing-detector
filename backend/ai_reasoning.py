@@ -1,9 +1,3 @@
-"""
-ai_reasoning.py
-Gemini-powered reasoning layer. Only called for high-risk or ambiguous messages.
-All logic lives in the backend — the frontend just displays the result.
-"""
-
 import os
 import json
 import hashlib
@@ -20,7 +14,7 @@ except Exception:
 
 # In-memory cache: hash(prompt + model_version) → result dict
 _ai_cache: dict = {}
-_CACHE_VERSION = "v8"
+_CACHE_VERSION = "v9"
 
 # Threshold: only invoke AI when combined rule score exceeds this
 AI_INVOKE_THRESHOLD = 2
@@ -88,8 +82,8 @@ MODELS = [
 
 def _call_gemini(prompt: str) -> dict | None:
     """
-    Try each model in order. On 429 immediately tries next model (no sleep).
-    Returns parsed result dict or None on failure.
+    Try each model in order. Uses response_schema to guarantee structured JSON.
+    On 429/503/404 immediately tries next model.
     """
     if not GEMINI_API_KEY:
         return None
@@ -97,29 +91,39 @@ def _call_gemini(prompt: str) -> dict | None:
     import urllib.request
     import urllib.error
 
+    response_schema = {
+        "type": "OBJECT",
+        "properties": {
+            "verdict":        {"type": "STRING"},
+            "confidence":     {"type": "NUMBER"},
+            "primary_threat": {"type": "STRING"},
+            "key_indicators": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "reasoning":      {"type": "STRING"},
+        },
+        "required": ["verdict", "confidence", "key_indicators", "reasoning"],
+    }
+
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": GEMINI_API_KEY,
+    }
+
     for model in MODELS:
-        url = (
+        api_url = (
             "https://generativelanguage.googleapis.com/v1beta/models/"
             f"{model}:generateContent?key={GEMINI_API_KEY}"
         )
-        payload = json.dumps({
+        body = json.dumps({
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.2,
                 "maxOutputTokens": 400,
                 "response_mime_type": "application/json",
+                "response_schema": response_schema,
             },
         }).encode("utf-8")
 
-        req = urllib.request.Request(
-            url,
-            data=payload,
-            headers={
-                "Content-Type": "application/json",
-                "x-goog-api-key": GEMINI_API_KEY,
-            },
-            method="POST",
-        )
+        req = urllib.request.Request(api_url, data=body, headers=headers, method="POST")
 
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
@@ -128,39 +132,32 @@ def _call_gemini(prompt: str) -> dict | None:
             raw_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
             raw_text = raw_text.replace("```json", "").replace("```", "").strip()
 
-            # With response_mime_type=application/json the whole response is JSON
-            json_match = None
+            parsed = None
             try:
-                json_match = json.loads(raw_text)
+                parsed = json.loads(raw_text)
             except json.JSONDecodeError:
-                # Fallback: find outermost braces
-                brace_start = raw_text.find("{")
-                brace_end   = raw_text.rfind("}") + 1
-                if brace_start != -1 and brace_end > brace_start:
+                brace_s = raw_text.find("{")
+                brace_e = raw_text.rfind("}") + 1
+                if brace_s != -1 and brace_e > brace_s:
                     try:
-                        json_match = json.loads(raw_text[brace_start:brace_end])
+                        parsed = json.loads(raw_text[brace_s:brace_e])
                     except json.JSONDecodeError:
                         pass
 
-            if json_match:
-                json_match["model"] = model
-                return json_match
+            if parsed and isinstance(parsed, dict):
+                parsed["model"] = model
+                return parsed
 
             return {
-                "verdict": None,
-                "reasoning": raw_text[:200],
-                "key_indicators": [],
-                "primary_threat": None,
-                "confidence": None,
-                "model": model,
+                "verdict": None, "reasoning": raw_text[:200],
+                "key_indicators": [], "primary_threat": None,
+                "confidence": None, "model": model,
                 "error": "json_parse_failed",
             }
 
         except urllib.error.HTTPError as e:
-            if e.code in (429, 503):
-                continue  # rate limited or overloaded → try next model
-            if e.code == 404:
-                continue  # model not found → try next
+            if e.code in (429, 503, 404):
+                continue
             return {"error": f"http_{e.code}"}
         except Exception as e:
             return {"error": str(e)}
@@ -254,6 +251,13 @@ def get_ai_reasoning(
         "model": result.get("model", "gemini"),
         "error": result.get("error") if "error" in result else None,
     }
+
+    # If JSON failed but we have raw text as reasoning, clear the error
+    # so the UI shows what it got rather than a failure message
+    if output["error"] == "json_parse_failed" and output.get("reasoning"):
+        r = output["reasoning"].strip()
+        if not (r.startswith("{") or r.startswith("[")):
+            output["error"] = None  # treat as partial success
 
     # Drop reasoning that looks cut off (doesn't end with punctuation)
     r = output.get("reasoning")
