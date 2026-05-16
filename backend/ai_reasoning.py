@@ -20,7 +20,7 @@ except Exception:
 
 # In-memory cache: hash(prompt + model_version) → result dict
 _ai_cache: dict = {}
-_CACHE_VERSION = "v9"
+_CACHE_VERSION = "v10"
 
 # Threshold: only invoke AI when combined rule score exceeds this
 AI_INVOKE_THRESHOLD = 2
@@ -88,14 +88,20 @@ MODELS = [
 
 def _call_gemini(prompt: str) -> dict | None:
     """
-    Try each model in order. Uses response_schema to guarantee structured JSON.
-    On 429/503/404 immediately tries next model.
+    Uses google-genai SDK with response_schema for guaranteed structured output.
+    The SDK automatically filters Gemini 2.5 thought parts before parsing.
+    Falls back through MODELS list on 429/503/404.
     """
     if not GEMINI_API_KEY:
         return None
 
-    import urllib.request
-    import urllib.error
+    try:
+        from google import genai as google_genai
+        from google.genai import types
+    except ImportError:
+        return {"error": "missing_sdk"}
+
+    client = google_genai.Client(api_key=GEMINI_API_KEY)
 
     response_schema = {
         "type": "OBJECT",
@@ -109,44 +115,31 @@ def _call_gemini(prompt: str) -> dict | None:
         "required": ["verdict", "confidence", "key_indicators", "reasoning"],
     }
 
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": GEMINI_API_KEY,
-    }
-
     for model in MODELS:
-        api_url = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{model}:generateContent?key={GEMINI_API_KEY}"
-        )
-        body = json.dumps({
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0.2,
-                "maxOutputTokens": 400,
-                "response_mime_type": "application/json",
-                "response_schema": response_schema,
-            },
-        }).encode("utf-8")
-
-        req = urllib.request.Request(api_url, data=body, headers=headers, method="POST")
-
         try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.2,
+                    max_output_tokens=400,
+                    response_mime_type="application/json",
+                    response_schema=response_schema,
+                ),
+            )
 
-            raw_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            raw_text = raw_text.replace("```json", "").replace("```", "").strip()
+            raw = response.text.strip() if response.text else ""
+            raw = raw.replace("```json", "").replace("```", "").strip()
 
             parsed = None
             try:
-                parsed = json.loads(raw_text)
+                parsed = json.loads(raw)
             except json.JSONDecodeError:
-                brace_s = raw_text.find("{")
-                brace_e = raw_text.rfind("}") + 1
+                brace_s = raw.find("{")
+                brace_e = raw.rfind("}") + 1
                 if brace_s != -1 and brace_e > brace_s:
                     try:
-                        parsed = json.loads(raw_text[brace_s:brace_e])
+                        parsed = json.loads(raw[brace_s:brace_e])
                     except json.JSONDecodeError:
                         pass
 
@@ -155,18 +148,19 @@ def _call_gemini(prompt: str) -> dict | None:
                 return parsed
 
             return {
-                "verdict": None, "reasoning": raw_text[:200],
+                "verdict": None, "reasoning": raw[:200],
                 "key_indicators": [], "primary_threat": None,
                 "confidence": None, "model": model,
                 "error": "json_parse_failed",
             }
 
-        except urllib.error.HTTPError as e:
-            if e.code in (429, 503, 404):
-                continue
-            return {"error": f"http_{e.code}"}
         except Exception as e:
-            return {"error": str(e)}
+            err = str(e)
+            if "429" in err or "quota" in err.lower() or "503" in err:
+                continue
+            if "404" in err:
+                continue
+            return {"error": err[:100]}
 
     return {"error": "rate_limited"}
 
