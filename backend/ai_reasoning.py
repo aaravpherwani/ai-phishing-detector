@@ -20,7 +20,7 @@ except Exception:
 
 # In-memory cache: hash(prompt + model_version) → result dict
 _ai_cache: dict = {}
-_CACHE_VERSION = "v11"
+_CACHE_VERSION = "v12"
 
 # Threshold: only invoke AI when combined rule score exceeds this
 AI_INVOKE_THRESHOLD = 2
@@ -81,8 +81,8 @@ Fields:
 
 
 MODELS = [
-    "gemini-2.5-flash",       # primary — 10 RPM free tier
-    "gemini-2.5-flash-lite",  # fallback — 15 RPM, highest free throughput
+    "gemini-2.5-flash-lite",  # primary — minimal thinking overhead, reliable JSON
+    "gemini-2.5-flash",       # fallback
 ]
 
 
@@ -122,9 +122,10 @@ def _call_gemini(prompt: str) -> dict | None:
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     temperature=0.2,
-                    max_output_tokens=600,
+                    max_output_tokens=1024,
                     response_mime_type="application/json",
                     response_schema=response_schema,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
                 ),
             )
 
