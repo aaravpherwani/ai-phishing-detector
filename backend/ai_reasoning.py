@@ -20,7 +20,7 @@ except Exception:
 
 # In-memory cache: hash(prompt + model_version) → result dict
 _ai_cache: dict = {}
-_CACHE_VERSION = "v10"
+_CACHE_VERSION = "v11"
 
 # Threshold: only invoke AI when combined rule score exceeds this
 AI_INVOKE_THRESHOLD = 2
@@ -65,7 +65,7 @@ def _build_prompt(
 
     prompt = f"""You are a cybersecurity analyst. Analyze this message for phishing or scams.
 
-MESSAGE: {text[:800]}
+MESSAGE: {text[:500]}
 
 SCORES: {context}
 
@@ -122,7 +122,7 @@ def _call_gemini(prompt: str) -> dict | None:
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     temperature=0.2,
-                    max_output_tokens=400,
+                    max_output_tokens=600,
                     response_mime_type="application/json",
                     response_schema=response_schema,
                 ),
@@ -135,12 +135,26 @@ def _call_gemini(prompt: str) -> dict | None:
             try:
                 parsed = json.loads(raw)
             except json.JSONDecodeError:
+                # Try extracting just the outermost JSON object
                 brace_s = raw.find("{")
                 brace_e = raw.rfind("}") + 1
                 if brace_s != -1 and brace_e > brace_s:
                     try:
                         parsed = json.loads(raw[brace_s:brace_e])
                     except json.JSONDecodeError:
+                        pass
+                # Last resort: truncated JSON — try to recover verdict at least
+                if not parsed and '"verdict"' in raw:
+                    try:
+                        v = raw.split('"verdict"')[1].split('"')[1]
+                        parsed = {
+                            "verdict": v,
+                            "confidence": 0.8,
+                            "reasoning": "Analysis complete (response truncated).",
+                            "key_indicators": [],
+                            "primary_threat": None,
+                        }
+                    except Exception:
                         pass
 
             if parsed and isinstance(parsed, dict):
