@@ -45,11 +45,7 @@ h1, h2, h3 { font-family: 'IBM Plex Mono', monospace; }
     border-radius: 8px;
     padding: 18px 22px;
     line-height: 1.7;
-    color: #1a2a3a;
     font-size: 0.95rem;
-}
-@media (prefers-color-scheme: dark) {
-    .ai-box { color: #c8d8f0; }
 }
 .ai-badge { display: inline-block; color: #4d9fff; border: 1px solid #1a4a8a; border-radius: 4px; font-family: 'IBM Plex Mono', monospace; font-size: 0.65rem; letter-spacing: 0.12em; padding: 2px 8px; margin-bottom: 10px; text-transform: uppercase; }
 .indicator-pill { display: inline-block; border-radius: 4px; padding: 3px 10px; font-family: 'IBM Plex Mono', monospace; font-size: 0.72rem; margin: 3px 3px 3px 0; font-weight: 600; }
@@ -203,7 +199,7 @@ if analyze_btn:
     if kw_norm > 0 or us > 0 or vts > 0:
         with st.expander("📊 Feature Score Breakdown", expanded=True):
             import matplotlib.pyplot as plt
-            fig, ax = plt.subplots(figsize=(6, 1))
+            fig, ax = plt.subplots(figsize=(3, 1.4))
             categories = ["Keyword Risk", "URL Risk", "VirusTotal"]
             values     = [kw_norm, us, vts]
             colors     = [
@@ -273,7 +269,13 @@ if analyze_btn:
     if ai_result.get("used") and reasoning:
         cached_note = " · cached" if ai_result.get("cached") else ""
         model_name  = ai_result.get("model", "gemini")
-        st.markdown(f'<div class="ai-box"><div class="ai-badge">{model_name}{cached_note}</div><br>{reasoning}</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="ai-box">'
+            f'<div class="ai-badge">{model_name}{cached_note}</div><br>'
+            f'{reasoning}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
         if ai_result.get("key_indicators"):
             st.markdown(" ")
             st.markdown("".join(f'<span class="indicator-pill pill-warn">{i}</span>' for i in ai_result["key_indicators"]), unsafe_allow_html=True)
