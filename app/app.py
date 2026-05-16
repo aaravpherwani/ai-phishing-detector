@@ -37,6 +37,7 @@ h1, h2, h3 { font-family: 'IBM Plex Mono', monospace; }
 .score-label { font-size: 0.7rem; color: #888; text-transform: uppercase; letter-spacing: 0.1em; font-family: 'IBM Plex Sans', sans-serif; }
 .score-value { font-size: 1.8rem; font-weight: 600; font-family: 'IBM Plex Sans', sans-serif; margin: 4px 0 0 0; }
 .score-denom { font-size: 0.9rem; font-weight: 400; color: #666; }
+.score-sublabel { font-size: 0.62rem; color: #666; margin-top: 4px; font-family: 'IBM Plex Sans', sans-serif; }
 .score-high  { color: #ff4444; }
 .score-med   { color: #ffaa00; }
 .score-low   { color: #00dd44; }
@@ -172,36 +173,68 @@ if analyze_btn:
 
     st.markdown("---")
 
-    # Verdict — border only, no background
+    # Verdict
     verdict_class = "verdict-phishing" if label == "PHISHING" else "verdict-safe"
     verdict_icon  = "⚠️ PHISHING DETECTED" if label == "PHISHING" else "✅ SAFE"
-    st.markdown(f'<div class="{verdict_class}">{verdict_icon} &nbsp;·&nbsp; {confidence:.0%} confidence</div>', unsafe_allow_html=True)
+    ai_adjusted   = scores.get("ai_adjusted", False)
+    conf_pre_ai   = scores.get("confidence_pre_ai", confidence)
+
+    if ai_adjusted:
+        delta     = confidence - conf_pre_ai
+        delta_str = f'+{delta:.0%}' if delta > 0 else f'{delta:.0%}'
+        ai_note   = f' &nbsp;<span style="font-size:0.75rem; opacity:0.7;">· AI adjusted {delta_str}</span>'
+    else:
+        ai_note = ""
+
+    st.markdown(
+        f'<div class="{verdict_class}">{verdict_icon} &nbsp;·&nbsp; {confidence:.0%} confidence{ai_note}</div>',
+        unsafe_allow_html=True,
+    )
     st.markdown(" ")
 
-    # Score cards
+    # ── Risk scoring ─────────────────────────────────────────────────────────
+    # Weights: Language 30% · URL Structure 40% · External Intel 30%
+    # All components /10. Overall = weighted average → also /10.
     kw      = scores["keyword_score"]
     us      = scores["url_score"]
     vts     = scores["vt_score"]
-    kw_norm = round(min(kw / 2, 10), 1)
-    overall = round(min((kw_norm + us + vts) / 3, 10), 1)
+    kw_norm = round(min(kw / 2, 10), 1)   # raw keyword score ~0-20 → /10
+
+    W_KW  = 0.30
+    W_URL = 0.40
+    W_VT  = 0.30
+    overall = round((kw_norm * W_KW) + (us * W_URL) + (vts * W_VT), 1)
 
     sc1, sc2, sc3, sc4 = st.columns(4)
-    for col, lbl, val in [(sc1,"Keyword Risk",kw_norm),(sc2,"URL Risk",us),(sc3,"VirusTotal",vts),(sc4,"Overall Risk",overall)]:
+    for col, lbl, sublbl, val in [
+        (sc1, "Language",      "30% weight · rule-based",  kw_norm),
+        (sc2, "URL Structure", "40% weight · deterministic", us),
+        (sc3, "External Intel","30% weight · VirusTotal",   vts),
+        (sc4, "Overall Risk",  "weighted average",           overall),
+    ]:
         cls = _score_class(val)
         with col:
             st.markdown(
-                f'<div class="score-card"><div class="score-label">{lbl}</div>'
-                f'<div class="score-value {cls}">{val}<span class="score-denom">/10</span></div></div>',
+                f'<div class="score-card">'
+                f'<div class="score-label">{lbl}</div>'
+                f'<div class="score-value {cls}">{val}<span class="score-denom">/10</span></div>'
+                f'<div class="score-sublabel">{sublbl}</div>'
+                f'</div>',
                 unsafe_allow_html=True)
     st.markdown(" ")
 
-    # Bar chart — hidden when all zero, horizontal labels via transposed DataFrame
+    # Bar chart — hidden when all zero
     if kw_norm > 0 or us > 0 or vts > 0:
-        with st.expander("📊 Feature Score Breakdown", expanded=True):
+        with st.expander("📊 Risk Score Breakdown", expanded=True):
+            base_formula = f"Overall {overall}/10 = Language ({kw_norm} × 30%) + URL Structure ({us} × 40%) + External Intel ({vts} × 30%)"
+            if ai_adjusted:
+                ai_conf_pct = round(float(ai_result.get("confidence", 0)) * 100)
+                base_formula += f"\nConfidence: {conf_pre_ai:.0%} (rule-based) → {confidence:.0%} after AI agreement ({ai_conf_pct}% AI confidence, 40% weight)"
+            st.caption(base_formula)
             import matplotlib.pyplot as plt
             fig, ax = plt.subplots(figsize=(5, 1.4))
             fig.patch.set_alpha(0)
-            categories = ["Keyword Risk", "URL Risk", "VirusTotal"]
+            categories = ["Language\n(30%)", "URL Structure\n(40%)", "External Intel\n(30%)"]
             values     = [kw_norm, us, vts]
             colors     = [
                 "#ff4444" if v >= 6 else "#ffaa00" if v >= 3 else "#00dd44"
@@ -210,10 +243,9 @@ if analyze_btn:
             bars = ax.bar(categories, values, color=colors, width=0.45, zorder=3)
             ax.set_ylim(0, 10)
             ax.set_ylabel("Score /10", fontsize=8, color="#888")
-            ax.tick_params(axis="x", labelsize=9)
+            ax.tick_params(axis="x", labelsize=8)
             ax.tick_params(axis="y", labelsize=8, colors="#888")
             ax.set_facecolor("none")
-            fig.patch.set_alpha(0)
             ax.spines["top"].set_visible(False)
             ax.spines["right"].set_visible(False)
             ax.spines["left"].set_color("#333")
