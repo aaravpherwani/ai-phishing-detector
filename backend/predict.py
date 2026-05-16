@@ -168,26 +168,26 @@ def predict_message(text: str):
         "vt_score": min(total_vt_score, 10),
     }
 
-    # --- AI confidence upgrade ---
-    # When AI has a strong, decisive verdict, blend it into the final confidence.
-    # This corrects cases where the ML is uncertain but the AI sees clear signal,
-    # or where the ML is over-confident but the AI reads it as safe.
+    GRAY_ZONE_LOW  = 2
+    GRAY_ZONE_HIGH = 6
+    ML_UNCERTAIN_THRESHOLD = 0.72
+    AI_CONFIDENT_THRESHOLD = 0.75
+
     if ai_result.get("used") and ai_result.get("confidence") is not None:
-        ai_conf = float(ai_result["confidence"])
+        ai_conf    = float(ai_result["confidence"])
         ai_verdict = ai_result.get("verdict")
 
-        # Only apply upgrade when AI and ML agree on the direction
-        if ai_verdict == "PHISHING" and label == "PHISHING":
-            # Blend: 60% ML, 40% AI — AI can push confidence higher when warranted
-            confidence = round(min((confidence * 0.60) + (ai_conf * 0.40), 0.99), 2)
-        elif ai_verdict == "SAFE" and label == "SAFE":
-            confidence = round(min((confidence * 0.60) + (ai_conf * 0.40), 0.97), 2)
-        elif ai_verdict == "SAFE" and label == "PHISHING":
-            # AI disagrees — pull confidence down, change to SUSPICIOUS reading
-            confidence = round(min(confidence * 0.65, 0.70), 2)
-        elif ai_verdict == "SUSPICIOUS":
-            # AI is uncertain — moderate the confidence either way
-            confidence = round(min(confidence * 0.80, 0.78), 2)
+        ml_uncertain = confidence < ML_UNCERTAIN_THRESHOLD
+        in_gray_zone = GRAY_ZONE_LOW <= rule_score <= GRAY_ZONE_HIGH
+        ai_confident = ai_conf >= AI_CONFIDENT_THRESHOLD
+        agrees_phish = ai_verdict == "PHISHING" and label == "PHISHING"
+        agrees_safe  = ai_verdict == "SAFE"      and label == "SAFE"
+        agrees       = agrees_phish or agrees_safe
+
+        if (ml_uncertain or in_gray_zone) and ai_confident and agrees:
+            # Blend: 60% ML+rules, 40% AI
+            ceiling = 0.99 if agrees_phish else 0.97
+            confidence = round(min((confidence * 0.60) + (ai_conf * 0.40), ceiling), 2)
 
     return (
         label,
