@@ -9,3 +9,4 @@ python-dotenv
 pytesseract
 Pillow
 matplotlib
+google-genai
