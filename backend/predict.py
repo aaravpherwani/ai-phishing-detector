@@ -163,10 +163,16 @@ def predict_message(text: str):
             label, confidence = "SAFE", 0.65
 
     scores = {
-        "keyword_score": keyword_score,
-        "url_score": min(url_score, 10),
-        "vt_score": min(total_vt_score, 10),
+        "keyword_score":      keyword_score,
+        "url_score":          min(url_score, 10),
+        "vt_score":           min(total_vt_score, 10),
+        "confidence_pre_ai":  confidence_before_ai,
+        "ai_adjusted":        ai_adjusted,
     }
+
+    # --- AI confidence upgrade ---
+    confidence_before_ai = round(confidence, 2)
+    ai_adjusted = False
 
     GRAY_ZONE_LOW  = 2
     GRAY_ZONE_HIGH = 6
@@ -185,9 +191,9 @@ def predict_message(text: str):
         agrees       = agrees_phish or agrees_safe
 
         if (ml_uncertain or in_gray_zone) and ai_confident and agrees:
-            # Blend: 60% ML+rules, 40% AI
             ceiling = 0.99 if agrees_phish else 0.97
             confidence = round(min((confidence * 0.60) + (ai_conf * 0.40), ceiling), 2)
+            ai_adjusted = (confidence != confidence_before_ai)
 
     return (
         label,
