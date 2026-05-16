@@ -226,9 +226,7 @@ if analyze_btn:
                     ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.15,
                             str(val), ha="center", va="bottom", fontsize=8, color="#888")
             plt.tight_layout()
-            _, chart_col, _ = st.columns([1, 3, 1])
-            with chart_col:
-                st.pyplot(fig, use_container_width=False)
+            st.pyplot(fig, use_container_width=False)
             plt.close(fig)
 
     # URL breakdown
