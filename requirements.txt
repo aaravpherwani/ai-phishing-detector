@@ -3,6 +3,7 @@ scikit-learn
 joblib
 pandas
 numpy
+scipy
 requests
 datasets
 python-dotenv
@@ -10,3 +11,8 @@ pytesseract
 Pillow
 matplotlib
 google-genai
+lightgbm
+transformers
+torch
+huggingface_hub
+safetensors
