@@ -22,19 +22,22 @@ except Exception:
 
 
 def generate_rule_explanations(text, keyword_score, url_score, vt_results):
-    """Original deterministic explanation bullets — kept as fallback."""
+    """Create deterministic phishing-indicator explanations."""
     explanations = []
     text_lower = text.lower()
 
-    if any(w in text_lower for w in ["urgent", "immediately", "act now"]):
+    if any(word in text_lower for word in ["urgent", "immediately", "act now"]):
         explanations.append("⚠️ Urgency language detected (pressure tactics).")
-    if any(w in text_lower for w in ["verify", "password", "account"]):
+
+    if any(word in text_lower for word in ["verify", "password", "account"]):
         explanations.append("🔐 Mentions sensitive account/security actions.")
-    if any(w in text_lower for w in ["won", "gift card", "prize"]):
+
+    if any(word in text_lower for word in ["won", "gift card", "prize"]):
         explanations.append("🎁 Possible scam reward / prize bait detected.")
 
     urls = extract_urls(text)
-    for i, original_url in enumerate(urls):
+
+    for index, original_url in enumerate(urls):
         normalized_url = normalize_url(original_url)
         domain = extract_domain(normalized_url)
 
@@ -47,8 +50,8 @@ def generate_rule_explanations(text, keyword_score, url_score, vt_results):
         if any(tld in domain for tld in [".xyz", ".top", ".click", ".tk"]):
             explanations.append("⚠️ Suspicious domain extension detected.")
 
-        if i < len(vt_results):
-            vt = vt_results[i]
+        if index < len(vt_results):
+            vt = vt_results[index]
 
             if vt["error"] == "no_key":
                 explanations.append("ℹ️ VirusTotal check skipped (no API key).")
@@ -85,6 +88,7 @@ def generate_rule_explanations(text, keyword_score, url_score, vt_results):
 
 
 def predict_message(text: str):
+    """Analyze a message and return phishing verdict, evidence, and scoring."""
     features = extract_features(text)
     keyword_score = features["keyword_score"]
     url_score = features["url_score"]
@@ -104,42 +108,51 @@ def predict_message(text: str):
     url_analyses = get_url_analysis(text)
 
     rule_explanations = generate_rule_explanations(
-        text, keyword_score, total_url_score, vt_results
+        text,
+        keyword_score,
+        total_url_score,
+        vt_results,
     )
 
     ai_result = get_ai_reasoning(
-        text, keyword_score, total_url_score, vt_results, url_analyses
+        text,
+        keyword_score,
+        total_url_score,
+        vt_results,
+        url_analyses,
     )
 
     rule_score = keyword_score + total_url_score
 
-    def _confidence_ceiling(rs: float) -> float:
-        if rs == 0:
+    def confidence_ceiling(score: float) -> float:
+        if score == 0:
             return 0.60
-        if rs <= 2:
+        if score <= 2:
             return 0.72
-        if rs <= 4:
+        if score <= 4:
             return 0.84
-        if rs <= 7:
+        if score <= 7:
             return 0.93
         return 0.99
 
     if model and vectorizer:
         tfidf_vec = vectorizer.transform([text])
-        X = hstack([
+        feature_vector = hstack([
             tfidf_vec,
             csr_matrix([[keyword_score]]),
             csr_matrix([[total_url_score]]),
         ])
 
-        proba = model.predict_proba(X)[0]
-        safe_prob, phish_prob = proba[0], proba[1]
-        ceiling = _confidence_ceiling(rule_score)
+        probabilities = model.predict_proba(feature_vector)[0]
+        safe_prob, phish_prob = probabilities[0], probabilities[1]
 
         if phish_prob >= 0.5 or rule_score >= 2:
             label = "PHISHING"
-            raw = (phish_prob * 0.55) + (min(rule_score / 15, 1.0) * 0.45)
-            confidence = min(raw, ceiling)
+            raw_confidence = (
+                phish_prob * 0.55
+                + min(rule_score / 15, 1.0) * 0.45
+            )
+            confidence = min(raw_confidence, confidence_ceiling(rule_score))
         else:
             label = "SAFE"
             confidence = min(safe_prob + 0.05, 0.97)
@@ -155,30 +168,35 @@ def predict_message(text: str):
         else:
             label, confidence = "SAFE", 0.65
 
-    # Initialize these before they are used in the scores dictionary.
+    # These must be initialized before the AI adjustment and scores dictionary.
     confidence_before_ai = round(confidence, 2)
     ai_adjusted = False
 
-    GRAY_ZONE_LOW = 2
-    GRAY_ZONE_HIGH = 6
-    ML_UNCERTAIN_THRESHOLD = 0.72
-    AI_CONFIDENT_THRESHOLD = 0.75
+    gray_zone_low = 2
+    gray_zone_high = 6
+    ml_uncertain_threshold = 0.72
+    ai_confident_threshold = 0.75
 
     if ai_result.get("used") and ai_result.get("confidence") is not None:
-        ai_conf = float(ai_result["confidence"])
+        ai_confidence = float(ai_result["confidence"])
         ai_verdict = ai_result.get("verdict")
 
-        ml_uncertain = confidence < ML_UNCERTAIN_THRESHOLD
-        in_gray_zone = GRAY_ZONE_LOW <= rule_score <= GRAY_ZONE_HIGH
-        ai_confident = ai_conf >= AI_CONFIDENT_THRESHOLD
-        agrees_phish = ai_verdict == "PHISHING" and label == "PHISHING"
-        agrees_safe = ai_verdict == "SAFE" and label == "SAFE"
-        agrees = agrees_phish or agrees_safe
+        ml_uncertain = confidence < ml_uncertain_threshold
+        in_gray_zone = gray_zone_low <= rule_score <= gray_zone_high
+        ai_confident = ai_confidence >= ai_confident_threshold
 
-        if (ml_uncertain or in_gray_zone) and ai_confident and agrees:
-            ceiling = 0.99 if agrees_phish else 0.97
+        agrees_phishing = ai_verdict == "PHISHING" and label == "PHISHING"
+        agrees_safe = ai_verdict == "SAFE" and label == "SAFE"
+
+        if (ml_uncertain or in_gray_zone) and ai_confident and (
+            agrees_phishing or agrees_safe
+        ):
+            ceiling = 0.99 if agrees_phishing else 0.97
             confidence = round(
-                min((confidence * 0.60) + (ai_conf * 0.40), ceiling),
+                min(
+                    (confidence * 0.60) + (ai_confidence * 0.40),
+                    ceiling,
+                ),
                 2,
             )
             ai_adjusted = confidence != confidence_before_ai
