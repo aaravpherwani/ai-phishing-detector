@@ -16,19 +16,18 @@ try:
     vectorizer = joblib.load(VECTORIZER_PATH)
 
     test_vector = vectorizer.transform(["test"])
-    test_features = hstack([
+    test_input = hstack([
         test_vector,
         csr_matrix([[0]]),
         csr_matrix([[0]]),
     ])
-    model.predict_proba(test_features)
+    model.predict_proba(test_input)
 except Exception:
     model = None
     vectorizer = None
 
 
 def generate_rule_explanations(text, keyword_score, url_score, vt_results):
-    """Create deterministic explanations for detected phishing indicators."""
     explanations = []
     text_lower = text.lower()
 
@@ -57,29 +56,31 @@ def generate_rule_explanations(text, keyword_score, url_score, vt_results):
         if index >= len(vt_results):
             continue
 
-        vt = vt_results[index]
+        vt_result = vt_results[index]
 
-        if vt["error"] == "no_key":
+        if vt_result["error"] == "no_key":
             explanations.append("ℹ️ VirusTotal check skipped (no API key).")
-        elif vt["error"] == "rate_limited":
+        elif vt_result["error"] == "rate_limited":
             explanations.append("⏱️ VirusTotal rate limit reached.")
-        elif vt["error"] == "invalid_key":
+        elif vt_result["error"] == "invalid_key":
             explanations.append("❌ VirusTotal API key is invalid.")
-        elif vt["error"] == "timeout":
+        elif vt_result["error"] == "timeout":
             explanations.append("⏱️ VirusTotal check timed out.")
-        elif vt["error"]:
-            explanations.append(f"⚠️ VirusTotal check failed: {vt['error']}.")
-        elif vt["malicious"] > 0:
+        elif vt_result["error"]:
             explanations.append(
-                f"🚨 VirusTotal: {vt['malicious']} vendors flagged URL as malicious."
+                f"⚠️ VirusTotal check failed: {vt_result['error']}."
             )
-        elif vt["suspicious"] > 0:
+        elif vt_result["malicious"] > 0:
             explanations.append(
-                f"⚠️ VirusTotal: {vt['suspicious']} vendors flagged URL as suspicious."
+                f"🚨 VirusTotal: {vt_result['malicious']} vendors flagged URL as malicious."
+            )
+        elif vt_result["suspicious"] > 0:
+            explanations.append(
+                f"⚠️ VirusTotal: {vt_result['suspicious']} vendors flagged URL as suspicious."
             )
         else:
             explanations.append(
-                f"✅ VirusTotal: URL clean ({vt['harmless']} vendors confirmed safe)."
+                f"✅ VirusTotal: URL clean ({vt_result['harmless']} vendors confirmed safe)."
             )
 
     if url_score >= 6:
@@ -93,7 +94,7 @@ def generate_rule_explanations(text, keyword_score, url_score, vt_results):
     return explanations
 
 
-def confidence_ceiling(rule_score):
+def get_confidence_ceiling(rule_score):
     if rule_score == 0:
         return 0.60
     if rule_score <= 2:
@@ -106,7 +107,6 @@ def confidence_ceiling(rule_score):
 
 
 def predict_message(text: str):
-    """Return phishing verdict, confidence, analysis details, and score data."""
     features = extract_features(text)
     keyword_score = features["keyword_score"]
     url_score = features["url_score"]
@@ -143,15 +143,15 @@ def predict_message(text: str):
     )
 
     if model is not None and vectorizer is not None:
-        tfidf_vector = vectorizer.transform([text])
-        feature_vector = hstack([
-            tfidf_vector,
+        text_vector = vectorizer.transform([text])
+        model_input = hstack([
+            text_vector,
             csr_matrix([[keyword_score]]),
             csr_matrix([[total_url_score]]),
         ])
 
         safe_probability, phishing_probability = model.predict_proba(
-            feature_vector
+            model_input
         )[0]
 
         if phishing_probability >= 0.5 or rule_score >= 2:
@@ -160,7 +160,10 @@ def predict_message(text: str):
                 phishing_probability * 0.55
                 + min(rule_score / 15, 1.0) * 0.45
             )
-            confidence = min(raw_confidence, confidence_ceiling(rule_score))
+            confidence = min(
+                raw_confidence,
+                get_confidence_ceiling(rule_score),
+            )
         else:
             label = "SAFE"
             confidence = min(safe_probability + 0.05, 0.97)
@@ -176,7 +179,7 @@ def predict_message(text: str):
         else:
             label, confidence = "SAFE", 0.65
 
-    initial_confidence = round(confidence, 2)
+    model_confidence = round(confidence, 2)
     ai_adjusted = False
 
     if ai_result.get("used") and ai_result.get("confidence") is not None:
@@ -184,20 +187,24 @@ def predict_message(text: str):
         ai_verdict = ai_result.get("verdict")
 
         model_is_uncertain = confidence < 0.72
-        rule_score_in_gray_zone = 2 <= rule_score <= 6
+        score_is_in_gray_zone = 2 <= rule_score <= 6
         ai_is_confident = ai_confidence >= 0.75
 
-        agrees_on_phishing = (
-            ai_verdict == "PHISHING" and label == "PHISHING"
+        agreement_on_phishing = (
+            label == "PHISHING" and ai_verdict == "PHISHING"
         )
-        agrees_on_safety = ai_verdict == "SAFE" and label == "SAFE"
+        agreement_on_safety = (
+            label == "SAFE" and ai_verdict == "SAFE"
+        )
 
         if (
-            (model_is_uncertain or rule_score_in_gray_zone)
+            (model_is_uncertain or score_is_in_gray_zone)
             and ai_is_confident
-            and (agrees_on_phishing or agrees_on_safety)
+            and (agreement_on_phishing or agreement_on_safety)
         ):
-            maximum_confidence = 0.99 if agrees_on_phishing else 0.97
+            maximum_confidence = (
+                0.99 if agreement_on_phishing else 0.97
+            )
 
             confidence = round(
                 min(
@@ -206,13 +213,14 @@ def predict_message(text: str):
                 ),
                 2,
             )
-            ai_adjusted = confidence != initial_confidence
+
+            ai_adjusted = confidence != model_confidence
 
     scores = {
         "keyword_score": keyword_score,
         "url_score": min(url_score, 10),
         "vt_score": min(total_vt_score, 10),
-        "confidence_pre_ai": initial_confidence,
+        "confidence_pre_ai": model_confidence,
         "ai_adjusted": ai_adjusted,
     }
 
