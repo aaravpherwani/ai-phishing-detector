@@ -6,6 +6,7 @@ Artifact contract for the Hugging Face model repository:
 metadata.json
 lightgbm_model.joblib
 lightgbm_vectorizer.joblib
+ensemble_calibrator.joblib
 distilbert/
     config.json
     model.safetensors (or pytorch_model.bin)
@@ -66,6 +67,7 @@ def get_artifact_directory():
                 "metadata.json",
                 "lightgbm_model.joblib",
                 "lightgbm_vectorizer.joblib",
+                "ensemble_calibrator.joblib",
                 "distilbert/*",
             ],
         )
@@ -88,25 +90,40 @@ def load_ensemble():
 
     try:
         metadata_path = os.path.join(artifact_directory, "metadata.json")
-        lightgbm_path = os.path.join(artifact_directory, "lightgbm_model.joblib")
+        lightgbm_path = os.path.join(
+            artifact_directory,
+            "lightgbm_model.joblib",
+        )
         vectorizer_path = os.path.join(
             artifact_directory,
             "lightgbm_vectorizer.joblib",
         )
-        distilbert_path = os.path.join(artifact_directory, "distilbert")
+        calibrator_path = os.path.join(
+            artifact_directory,
+            "ensemble_calibrator.joblib",
+        )
+        distilbert_path = os.path.join(
+            artifact_directory,
+            "distilbert",
+        )
 
         with open(metadata_path, "r", encoding="utf-8") as file:
             metadata = json.load(file)
 
         lightgbm_model = joblib.load(lightgbm_path)
         lightgbm_vectorizer = joblib.load(vectorizer_path)
+        ensemble_calibrator = joblib.load(calibrator_path)
 
-        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+        from transformers import (
+            AutoModelForSequenceClassification,
+            AutoTokenizer,
+        )
 
         distilbert_tokenizer = AutoTokenizer.from_pretrained(
             distilbert_path,
             local_files_only=True,
         )
+
         distilbert_model = AutoModelForSequenceClassification.from_pretrained(
             distilbert_path,
             local_files_only=True,
@@ -118,6 +135,7 @@ def load_ensemble():
             "metadata": metadata,
             "lightgbm_model": lightgbm_model,
             "lightgbm_vectorizer": lightgbm_vectorizer,
+            "ensemble_calibrator": ensemble_calibrator,
             "distilbert_tokenizer": distilbert_tokenizer,
             "distilbert_model": distilbert_model,
         }
@@ -134,6 +152,7 @@ def _lightgbm_probability(runtime, text, keyword_score, url_score):
     model = runtime["lightgbm_model"]
 
     text_features = vectorizer.transform([text])
+
     model_input = hstack([
         text_features,
         csr_matrix([[keyword_score]]),
@@ -166,11 +185,10 @@ def _distilbert_probability(runtime, text):
 
 def predict_ensemble(text, keyword_score, url_score):
     """
-    Return ensemble phishing probability.
+    Return a calibrated ensemble phishing probability.
 
-    The caller owns final policy decisions, URL intelligence, confidence caps,
-    and explainability. This makes the same runtime reusable by Streamlit,
-    FastAPI, and a future browser-extension API.
+    This UI-independent function can be called by Streamlit, FastAPI, or a
+    future Chrome-extension API backend.
     """
     runtime = load_ensemble()
 
@@ -184,12 +202,6 @@ def predict_ensemble(text, keyword_score, url_score):
         }
 
     try:
-        metadata = runtime["metadata"]
-        weights = metadata.get(
-            "ensemble_weights",
-            {"lightgbm": 0.45, "distilbert": 0.55},
-        )
-
         lightgbm_probability = _lightgbm_probability(
             runtime,
             text,
@@ -199,18 +211,23 @@ def predict_ensemble(text, keyword_score, url_score):
 
         distilbert_probability = _distilbert_probability(runtime, text)
 
-        phishing_probability = (
-            lightgbm_probability * float(weights["lightgbm"])
-            + distilbert_probability * float(weights["distilbert"])
+        features = np.array([[
+            lightgbm_probability,
+            distilbert_probability,
+        ]])
+
+        ensemble_calibrator = runtime["ensemble_calibrator"]
+
+        phishing_probability = float(
+            ensemble_calibrator.predict_proba(features)[0][1]
         )
 
         return {
             "available": True,
-            "reason": None,
-            "phishing_probability": float(phishing_probability),
-            "lightgbm_probability": float(lightgbm_probability),
-            "distilbert_probability": float(distilbert_probability),
-            "model_version": metadata.get("model_version", "unknown"),
+            "phishing_probability": phishing_probability,
+            "lightgbm_probability": lightgbm_probability,
+            "distilbert_probability": distilbert_probability,
+            "model_version": runtime["metadata"]["model_version"],
         }
 
     except Exception as error:
