@@ -1,7 +1,6 @@
 import os
 
 import joblib
-import numpy as np
 from scipy.sparse import csr_matrix, hstack
 
 from backend.ai_reasoning import get_ai_reasoning
@@ -31,6 +30,7 @@ except Exception:
 
 
 def should_scan_url(url_analysis, keyword_score):
+    """Only spend VirusTotal calls on URLs with meaningful risk signals."""
     return any([
         keyword_score >= 4,
         url_analysis["uses_ip"],
@@ -47,6 +47,7 @@ def should_scan_url(url_analysis, keyword_score):
 
 
 def generate_rule_explanations(text, keyword_score, url_score, vt_results):
+    """Generate deterministic phishing and VirusTotal explanations."""
     explanations = []
     text_lower = text.lower()
 
@@ -117,6 +118,7 @@ def generate_rule_explanations(text, keyword_score, url_score, vt_results):
 
 
 def legacy_prediction(text, keyword_score, total_url_score, rule_score):
+    """Fallback to the existing logistic-regression model or rules."""
     if legacy_model is None or legacy_vectorizer is None:
         if rule_score == 0:
             return "SAFE", 0.85, "rule engine"
@@ -127,6 +129,7 @@ def legacy_prediction(text, keyword_score, total_url_score, rule_score):
         return "SAFE", 0.65, "rule engine"
 
     text_vector = legacy_vectorizer.transform([text])
+
     model_input = hstack([
         text_vector,
         csr_matrix([[keyword_score]]),
@@ -138,12 +141,15 @@ def legacy_prediction(text, keyword_score, total_url_score, rule_score):
     )[0]
 
     if phishing_probability >= 0.5 or rule_score >= 2:
-        return "PHISHING", float(phishing_probability), "legacy logistic regression"
+        return "PHISHING", float(phishing_probability), (
+            "legacy logistic regression"
+        )
 
     return "SAFE", float(safe_probability), "legacy logistic regression"
 
 
 def apply_vt_confidence_guardrail(confidence, label, vt_results):
+    """Cap confidence when VirusTotal evidence is mixed or contradictory."""
     completed_results = [
         result
         for result in vt_results
@@ -154,6 +160,7 @@ def apply_vt_confidence_guardrail(confidence, label, vt_results):
         result["malicious"] > 0 or result["suspicious"] > 0
         for result in completed_results
     )
+
     has_harmless = any(
         result["harmless"] > 0
         for result in completed_results
@@ -173,12 +180,20 @@ def apply_vt_confidence_guardrail(confidence, label, vt_results):
 
 
 def predict_message(text: str):
+    """
+    Analyze a message.
+
+    Returns:
+        label, confidence, url_score, rule_explanations, url_analyses,
+        ai_result, scores
+    """
     features = extract_features(text)
     keyword_score = features["keyword_score"]
     url_score = features["url_score"]
 
     urls = extract_urls(text)
     url_analyses = get_url_analysis(text)
+
     analyses_by_raw_url = {
         analysis["raw_url"]: analysis
         for analysis in url_analyses
@@ -232,7 +247,12 @@ def predict_message(text: str):
 
     if ensemble_result["available"]:
         phishing_probability = ensemble_result["phishing_probability"]
-        label = "PHISHING" if phishing_probability >= 0.50 else "SAFE"
+
+        label = (
+            "PHISHING"
+            if phishing_probability >= 0.50
+            else "SAFE"
+        )
 
         confidence = (
             phishing_probability
@@ -241,11 +261,11 @@ def predict_message(text: str):
         )
 
         model_source = (
-            f"ensemble v{ensemble_result.get('model_version', 'unknown')}"
+            f"calibrated ensemble v{ensemble_result['model_version']}"
         )
 
         rule_explanations.append(
-            f"🧠 Ensemble prediction: "
+            f"🧠 Calibrated ensemble prediction: "
             f"LightGBM {ensemble_result['lightgbm_probability']:.0%} phishing risk, "
             f"DistilBERT {ensemble_result['distilbert_probability']:.0%} phishing risk."
         )
@@ -258,7 +278,7 @@ def predict_message(text: str):
         )
 
         rule_explanations.append(
-            f"ℹ️ Ensemble unavailable; using {model_source} fallback."
+            f"ℹ️ Calibrated ensemble unavailable; using {model_source} fallback."
         )
 
     confidence_before_ai = round(confidence, 2)
@@ -279,6 +299,7 @@ def predict_message(text: str):
         model_uncertain = confidence < 0.72
         in_gray_zone = 2 <= rule_score <= 6
         ai_confident = ai_confidence >= 0.75
+
         agrees = (
             (label == "PHISHING" and ai_verdict == "PHISHING")
             or (label == "SAFE" and ai_verdict == "SAFE")
@@ -286,11 +307,15 @@ def predict_message(text: str):
 
         if (model_uncertain or in_gray_zone) and ai_confident and agrees:
             ceiling = 0.99 if label == "PHISHING" else 0.97
+
             confidence = min(
                 (confidence * 0.60) + (ai_confidence * 0.40),
                 ceiling,
             )
-            ai_adjusted = round(confidence, 2) != confidence_before_ai
+
+            ai_adjusted = (
+                round(confidence, 2) != confidence_before_ai
+            )
 
     confidence, vt_note = apply_vt_confidence_guardrail(
         confidence,
