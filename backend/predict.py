@@ -216,6 +216,42 @@ def apply_vt_confidence_guardrail(confidence, label, vt_results):
     return confidence, None
 
 
+def apply_benign_evidence_guardrail(label, confidence, keyword_score, total_url_score,
+                                    urls, ensemble_result):
+    """Prevent one ensemble member from overruling unanimously benign evidence.
+
+    This is deliberately narrow: it applies only when there are no rule, URL,
+    or reputation signals and the two component models strongly disagree.  It
+    is not a sender-authentication check and therefore does not claim that a
+    message is trustworthy.
+    """
+    if (
+        label != "PHISHING"
+        or keyword_score != 0
+        or total_url_score != 0
+        or urls
+        or not ensemble_result.get("available")
+    ):
+        return label, confidence, None
+
+    lightgbm = ensemble_result.get("lightgbm_probability")
+    distilbert = ensemble_result.get("distilbert_probability")
+    if lightgbm is None or distilbert is None:
+        return label, confidence, None
+
+    # Example protected case: LightGBM 19%, DistilBERT 100%, while all
+    # deterministic signals are zero.  The lower-risk structured model is a
+    # more reliable tie-breaker than a single saturated neural prediction.
+    if lightgbm <= 0.25 and distilbert >= 0.85:
+        return (
+            "SAFE",
+            min(max(1 - float(lightgbm), 0.70), 0.90),
+            "Benign-evidence safeguard applied: no language, URL, or vendor "
+            "risk signals were found, while ensemble models strongly disagreed.",
+        )
+    return label, confidence, None
+
+
 def predict_message(text: str):
     features = extract_features(text)
     keyword_score, url_score = features["keyword_score"], features["url_score"]
@@ -246,6 +282,12 @@ def predict_message(text: str):
     else:
         label, confidence, model_source = legacy_prediction(text, keyword_score, total_url_score, rule_score)
         rule_explanations.append(f"ℹ️ Calibrated ensemble unavailable; using {model_source} fallback.")
+
+    label, confidence, benign_note = apply_benign_evidence_guardrail(
+        label, confidence, keyword_score, total_url_score, urls, ensemble,
+    )
+    if benign_note:
+        rule_explanations.append(f"🛡️ {benign_note}")
 
     # These values are intentionally initialized before AI blending and before
     # the scores dictionary is built.
