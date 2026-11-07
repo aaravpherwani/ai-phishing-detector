@@ -242,7 +242,9 @@ def _poll_analysis(analysis_id, headers):
             attributes = response.json().get("data", {}).get("attributes", {})
             if attributes.get("status") == "completed":
                 return _result_from_stats(attributes.get("stats") or {})
-            return _empty_result(None, "queued")
+            queued = _empty_result(None, "queued")
+            queued["analysis_id"] = analysis_id
+            return queued
         if response.status_code == 429:
             return _empty_result("rate_limited", "error")
         return _empty_result(f"http_{response.status_code}", "error")
@@ -270,8 +272,7 @@ def check_virustotal(url):
         if not analysis_id:
             return cached_result
         polled = _poll_analysis(analysis_id, headers)
-        if polled.get("status") != "queued":
-            _store_cached(normalized, polled)
+        _store_cached(normalized, polled)
         return polled
     encoded_url = _encode_url(normalized)
 
