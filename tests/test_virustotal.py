@@ -85,3 +85,10 @@ def test_shortened_url_is_eligible_for_reputation_lookup():
         "has_hex_encoding": False, "is_long": False, "is_http": False,
         "fake_brand_score": 0, "brand_spoof": None,
     }, 0)
+
+
+
+def test_legitimate_google_co_uk_is_not_flagged_as_brand_subdomain_spoof():
+    from backend.features import fake_domain_score
+
+    assert fake_domain_score("https://google.co.uk") == 0
