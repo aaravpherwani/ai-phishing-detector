@@ -237,11 +237,13 @@ def apply_url_verdict_guardrail(label, confidence, url_analyses, url_score):
             or item.get("fake_brand_score", 0) >= 5
         )
         if severe:
-            return ("PHISHING", max(float(confidence), 0.85),
+            phishing_confidence = 1.0 - float(confidence) if label == "SAFE" else float(confidence)
+            return ("PHISHING", phishing_confidence,
                     f"High-risk URL safeguard applied to {item.get('domain', 'a suspicious domain')}.")
     if url_score >= 8:
-        return ("PHISHING", max(float(confidence), 0.80),
-                "High URL-structure risk prevented a SAFE verdict.")
+        phishing_confidence = 1.0 - float(confidence) if label == "SAFE" else float(confidence)
+        return ("PHISHING", phishing_confidence,
+                "High URL-structure risk overrode the model's SAFE prediction.")
     return label, confidence, None
 
 
