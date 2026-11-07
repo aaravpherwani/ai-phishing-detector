@@ -362,7 +362,7 @@ def predict_message(text: str):
         label, confidence, keyword_score, total_url_score, urls, ensemble,
     )
     if benign_note:
-        rule_explanations.append(f"🛡️ {benign_note}")
+        rule_explanations.append(f"Safeguard: {benign_note}")
 
     label, confidence, url_guardrail_note = apply_url_verdict_guardrail(
         label, confidence, url_analyses, url_score,
