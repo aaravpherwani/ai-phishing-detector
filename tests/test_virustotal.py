@@ -92,3 +92,10 @@ def test_legitimate_google_co_uk_is_not_flagged_as_brand_subdomain_spoof():
     from backend.features import fake_domain_score
 
     assert fake_domain_score("https://google.co.uk") == 0
+
+
+
+def test_legitimate_google_accounts_subdomain_is_not_flagged():
+    from backend.features import fake_domain_score
+
+    assert fake_domain_score("https://accounts.google.com") == 0
