@@ -40,3 +40,48 @@ def test_six_malicious_and_fifty_nine_harmless_votes_score_ratio():
     assert result["total_votes"] == 65
     assert result["score"] == 0.92
     assert result["status"] == "mixed"
+
+
+
+def test_brand_in_subdomain_of_unrelated_domain_is_flagged():
+    from backend.features import fake_domain_score
+
+    assert fake_domain_score("https://google.account-security.verify-login.top/reset") >= 3
+
+
+def test_google_owned_domain_is_not_flagged_as_brand_spoof():
+    from backend.features import fake_domain_score
+
+    assert fake_domain_score("https://google.com") == 0
+
+
+def test_url_guardrail_overrides_safe_for_brand_spoof_and_suspicious_tld():
+    from backend.predict import apply_url_verdict_guardrail
+
+    analyses = [{
+        "domain": "drive-google-docs-secure.site",
+        "brand_spoof": "google",
+        "suspicious_tld": True,
+        "uses_ip": False,
+        "is_shortened": False,
+        "many_subdomains": False,
+        "has_at_symbol": False,
+        "has_hex_encoding": False,
+        "is_http": False,
+        "fake_brand_score": 3,
+    }]
+    label, confidence, note = apply_url_verdict_guardrail("SAFE", 0.73, analyses, 9)
+    assert label == "PHISHING"
+    assert confidence >= 0.85
+    assert note
+
+
+def test_shortened_url_is_eligible_for_reputation_lookup():
+    from backend.predict import should_scan_url
+
+    assert should_scan_url({
+        "uses_ip": False, "is_shortened": True, "suspicious_tld": False,
+        "many_subdomains": False, "has_at_symbol": False,
+        "has_hex_encoding": False, "is_long": False, "is_http": False,
+        "fake_brand_score": 0, "brand_spoof": None,
+    }, 0)
