@@ -255,7 +255,7 @@ def _poll_analysis(analysis_id, headers):
 
 
 def check_virustotal(url):
-    """Return a cached report or submit a scan and return without polling."""
+    """Return cached reputation, poll a queued scan once, or submit a new scan."""
     if not VIRUSTOTAL_API_KEY:
         return _empty_result("no_key")
 
