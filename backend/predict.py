@@ -18,7 +18,7 @@ from backend.virustotal import check_virustotal
 
 MODEL_PATH = os.path.join("models", "model.pkl")
 VECTORIZER_PATH = os.path.join("models", "vectorizer.pkl")
-MAX_VIRUSTOTAL_SCANS_PER_MESSAGE = 2
+MAX_VIRUSTOTAL_SCANS_PER_MESSAGE = 3
 # The rule engine can accumulate many phrase matches.  This is the documented
 # ceiling used only when displaying the language-risk component on a /10 scale.
 MAX_KEYWORD_RISK = 20
@@ -160,14 +160,19 @@ def generate_rule_explanations(text, keyword_score, url_score, vt_results):
     phrases = _matched_risk_phrases(text)
     for item in phrases:
         explanations.append(f"⚠️ {item['category'].title()}: “{item['phrase']}”.")
+    shortened_urls = {
+        item["raw_url"] for item in get_url_analysis(text) if item.get("is_shortened")
+    }
     for index, original_url in enumerate(extract_urls(text)):
         normalized = normalize_url(original_url)
         explanations.extend([f"🔗 URL detected: {normalized}", f"🌐 Domain: {extract_domain(normalized)}"])
+        if original_url in shortened_urls:
+            explanations.append("⚠️ This shortened link hides its final destination; treat the destination as unknown.")
         if index >= len(vt_results):
             continue
         result = vt_results[index]
         if result["error"] == "not_scanned":
-            explanations.append("ℹ️ VirusTotal scan skipped: this URL did not meet the high-risk scan threshold.")
+            explanations.append("ℹ️ VirusTotal scan skipped by the per-message scan limit; destination reputation remains unknown.")
         elif result["error"] == "no_key":
             explanations.append("ℹ️ VirusTotal check skipped (no API key).")
         elif result["error"] == "insufficient_votes":
@@ -219,6 +224,29 @@ def apply_vt_confidence_guardrail(confidence, label, vt_results):
     return confidence, None
 
 
+def apply_url_verdict_guardrail(label, confidence, url_analyses, url_score):
+    """Do not allow reassuring language/VT evidence to erase strong URL warnings."""
+    for item in url_analyses:
+        brand_tld_combo = bool(item.get("brand_spoof")) and bool(item.get("suspicious_tld"))
+        multiple_flags = sum(bool(item.get(key)) for key in (
+            "uses_ip", "is_shortened", "suspicious_tld", "many_subdomains",
+            "has_at_symbol", "has_hex_encoding", "is_http",
+        ))
+        severe = (
+            brand_tld_combo or item.get("uses_ip") or multiple_flags >= 3
+            or item.get("fake_brand_score", 0) >= 5
+        )
+        if severe:
+            phishing_confidence = 1.0 - float(confidence) if label == "SAFE" else float(confidence)
+            return ("PHISHING", phishing_confidence,
+                    f"High-risk URL safeguard applied to {item.get('domain', 'a suspicious domain')}.")
+    if url_score >= 8:
+        phishing_confidence = 1.0 - float(confidence) if label == "SAFE" else float(confidence)
+        return ("PHISHING", phishing_confidence,
+                "High URL-structure risk overrode the model's SAFE prediction.")
+    return label, confidence, None
+
+
 def apply_benign_evidence_guardrail(label, confidence, keyword_score, total_url_score,
                                     urls, ensemble_result):
     """Prevent one ensemble member from overruling unanimously benign evidence.
@@ -262,14 +290,26 @@ def predict_message(text: str):
     analyses = {item["raw_url"]: item for item in url_analyses}
     # Only high-risk URLs are sent to VirusTotal, with a strict per-message cap.
     # Independent HTTP requests run concurrently to avoid sequential latency.
-    eligible = [
+    eligible_candidates = [
         url for url in urls
         if analyses.get(url) and should_scan_url(analyses[url], keyword_score)
-    ][:MAX_VIRUSTOTAL_SCANS_PER_MESSAGE]
+    ]
+    def _scan_priority(url):
+        item = analyses[url]
+        return (
+            5 * bool(item.get("uses_ip"))
+            + 5 * bool(item.get("brand_spoof"))
+            + 3 * bool(item.get("suspicious_tld"))
+            + 3 * bool(item.get("is_shortened"))
+            + 2 * bool(item.get("many_subdomains"))
+            + 2 * bool(item.get("has_at_symbol"))
+            + 2 * bool(item.get("has_hex_encoding"))
+        )
+    eligible = sorted(eligible_candidates, key=_scan_priority, reverse=True)[:MAX_VIRUSTOTAL_SCANS_PER_MESSAGE]
     scans_used = len(eligible)
     scanned = {}
     if eligible:
-        with ThreadPoolExecutor(max_workers=min(2, len(eligible))) as executor:
+        with ThreadPoolExecutor(max_workers=min(3, len(eligible))) as executor:
             futures = {url: executor.submit(check_virustotal, url) for url in eligible}
             for url, future in futures.items():
                 try:
@@ -323,6 +363,12 @@ def predict_message(text: str):
     )
     if benign_note:
         rule_explanations.append(f"🛡️ {benign_note}")
+
+    label, confidence, url_guardrail_note = apply_url_verdict_guardrail(
+        label, confidence, url_analyses, url_score,
+    )
+    if url_guardrail_note:
+        rule_explanations.append(f"🚨 {url_guardrail_note}")
 
     # These values are intentionally initialized before AI blending and before
     # the scores dictionary is built.

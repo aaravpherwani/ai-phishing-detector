@@ -20,7 +20,7 @@ except Exception:
 
 # In-memory cache: hash(prompt + model_version) → result dict
 _ai_cache: dict = {}
-_CACHE_VERSION = "v12"
+_CACHE_VERSION = "v13"
 
 # Threshold: only invoke AI when combined rule score exceeds this
 AI_INVOKE_THRESHOLD = 2
@@ -88,9 +88,9 @@ MODELS = [
 
 def _call_gemini(prompt: str) -> dict | None:
     """
-    Uses google-genai SDK with response_schema for guaranteed structured output.
-    The SDK automatically filters Gemini 2.5 thought parts before parsing.
-    Falls back through MODELS list on 429/503/404.
+    Uses ordinary text generation and parses requested JSON locally.
+    Avoids response_mime_type / response_schema because JSON mode is not
+    enabled on every Gemini API version used by hosted deployments.
     """
     if not GEMINI_API_KEY:
         return None
@@ -103,18 +103,6 @@ def _call_gemini(prompt: str) -> dict | None:
 
     client = google_genai.Client(api_key=GEMINI_API_KEY)
 
-    response_schema = {
-        "type": "OBJECT",
-        "properties": {
-            "verdict":        {"type": "STRING"},
-            "confidence":     {"type": "NUMBER"},
-            "primary_threat": {"type": "STRING"},
-            "key_indicators": {"type": "ARRAY", "items": {"type": "STRING"}},
-            "reasoning":      {"type": "STRING"},
-        },
-        "required": ["verdict", "confidence", "key_indicators", "reasoning"],
-    }
-
     for model in MODELS:
         try:
             response = client.models.generate_content(
@@ -123,9 +111,6 @@ def _call_gemini(prompt: str) -> dict | None:
                 config=types.GenerateContentConfig(
                     temperature=0.2,
                     max_output_tokens=1024,
-                    response_mime_type="application/json",
-                    response_schema=response_schema,
-                    thinking_config=types.ThinkingConfig(thinking_budget=0),
                 ),
             )
 
@@ -159,6 +144,19 @@ def _call_gemini(prompt: str) -> dict | None:
                         pass
 
             if parsed and isinstance(parsed, dict):
+                verdict = str(parsed.get("verdict", "")).upper()
+                if verdict not in {"PHISHING", "SUSPICIOUS", "SAFE"}:
+                    return {"error": "invalid_verdict", "model": model}
+                try:
+                    confidence = float(parsed.get("confidence"))
+                except (TypeError, ValueError):
+                    confidence = 0.5
+                parsed["confidence"] = min(1.0, max(0.0, confidence))
+                parsed["verdict"] = verdict
+                indicators = parsed.get("key_indicators", [])
+                parsed["key_indicators"] = [
+                    str(item)[:120] for item in indicators[:2]
+                ] if isinstance(indicators, list) else []
                 parsed["model"] = model
                 return parsed
 
@@ -279,5 +277,7 @@ def get_ai_reasoning(
     if r and not r.rstrip().endswith((".", "!", "?")):
         output["reasoning"] = None
 
-    _ai_cache[cache_key] = output
+    # Cache only successful, validated responses, never transient API errors.
+    if output.get("error") is None and output.get("verdict") in {"PHISHING", "SUSPICIOUS", "SAFE"}:
+        _ai_cache[cache_key] = output
     return output

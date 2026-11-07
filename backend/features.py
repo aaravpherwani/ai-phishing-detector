@@ -201,7 +201,23 @@ def fake_domain_score(url):
                 score += 5
 
         parts = domain.replace("www.", "").split(".")
-        if real_brand in domain and parts and parts[0] != real_brand:
+        # Account for common multi-label public suffixes so legitimate domains
+        # such as google.co.uk are not mistaken for brand-in-subdomain spoofs.
+        two_label_suffixes = {
+            "co.uk", "org.uk", "ac.uk", "com.au", "net.au", "org.au",
+            "co.nz", "co.jp", "com.br", "com.mx", "co.in", "com.sg",
+            "co.za", "com.tr", "com.tw",
+        }
+        suffix = ".".join(parts[-2:]) if len(parts) >= 2 else ""
+        suffix_labels = 2 if suffix in two_label_suffixes else 1
+        registrable_index = -(suffix_labels + 1)
+        registrable_label = parts[registrable_index] if len(parts) > suffix_labels else ""
+        # Brand in a subdomain or embedded in an unrelated registrable label
+        # is suspicious; an exact registrable label (accounts.google.com) is not.
+        if (
+            real_brand in parts[:registrable_index]
+            or (real_brand in registrable_label and registrable_label != real_brand)
+        ):
             score += 3
 
     first_label = domain.split(".")[0] if domain else ""
