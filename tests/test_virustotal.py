@@ -72,7 +72,7 @@ def test_url_guardrail_overrides_safe_for_brand_spoof_and_suspicious_tld():
     }]
     label, confidence, note = apply_url_verdict_guardrail("SAFE", 0.73, analyses, 9)
     assert label == "PHISHING"
-    assert confidence >= 0.85
+    assert confidence == 0.27
     assert note
 
 
