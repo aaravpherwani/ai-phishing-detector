@@ -16,7 +16,8 @@ try:
 except Exception:
     GEMINI_KEY_SET = bool(os.getenv("GEMINI_API_KEY"))
 
-st.set_page_config(page_title="PhishGuard AI", page_icon="🛡️", layout="wide")
+LOGO_URL = "https://www.image2url.com/r2/default/images/1794075978712-bdfa62a3-45fe-4179-8b1a-677df8175818.png"
+st.set_page_config(page_title="PhishGuard AI", page_icon=LOGO_URL, layout="wide")
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
@@ -80,7 +81,11 @@ def score_style(value):
     return "high" if value >= 6 else "medium" if value >= 3 else "low"
 
 
-st.markdown("## 🛡️ PhishGuard AI")
+logo_col, title_col = st.columns([0.08, 0.92], vertical_alignment="center")
+with logo_col:
+    st.image(LOGO_URL, width=52)
+with title_col:
+    st.markdown("## PhishGuard AI")
 st.caption("Multi-layer threat analysis · ML + rule engine + VirusTotal + Gemini AI")
 if "extracted_text" not in st.session_state: st.session_state.extracted_text = ""
 upload = st.file_uploader("📎 Upload file to auto-fill (PNG, JPG, WEBP, EML, TXT)", type=["png", "jpg", "jpeg", "webp", "eml", "txt"])
