@@ -203,6 +203,10 @@ def fake_domain_score(url):
         parts = domain.replace("www.", "").split(".")
         if real_brand in domain and parts and parts[0] != real_brand:
             score += 3
+        # A brand name placed in a subdomain of an unrelated registrable
+        # domain is also a common spoofing pattern (e.g. google.login-example.top).
+        if real_brand in parts[:-2]:
+            score += 3
 
     first_label = domain.split(".")[0] if domain else ""
 
