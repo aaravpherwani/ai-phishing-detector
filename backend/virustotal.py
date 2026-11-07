@@ -53,6 +53,7 @@ def _empty_result(error=None, status="unavailable"):
         "suspicious": 0,
         "harmless": 0,
         "total_votes": 0,
+        "analysis_id": None,
         "error": error,
         "status": status,
         "checked": False,
@@ -229,6 +230,28 @@ def _result_from_stats(stats):
     }
 
 
+def _poll_analysis(analysis_id, headers):
+    """Poll a submitted analysis once; never sleep or busy-wait."""
+    try:
+        response = requests.get(
+            f"https://www.virustotal.com/api/v3/analyses/{analysis_id}",
+            headers=headers,
+            timeout=REQUEST_TIMEOUT,
+        )
+        if response.status_code == 200:
+            attributes = response.json().get("data", {}).get("attributes", {})
+            if attributes.get("status") == "completed":
+                return _result_from_stats(attributes.get("stats") or {})
+            return _empty_result(None, "queued")
+        if response.status_code == 429:
+            return _empty_result("rate_limited", "error")
+        return _empty_result(f"http_{response.status_code}", "error")
+    except requests.exceptions.Timeout:
+        return _empty_result("timeout", "error")
+    except requests.exceptions.RequestException:
+        return _empty_result("connection_error", "error")
+
+
 def check_virustotal(url):
     """Return a cached report or submit a scan and return without polling."""
     if not VIRUSTOTAL_API_KEY:
@@ -239,10 +262,17 @@ def check_virustotal(url):
         return _empty_result("invalid_url", "error")
 
     cached_result = _get_cached(normalized)
-    if cached_result is not None:
-        return cached_result
-
     headers = {"x-apikey": VIRUSTOTAL_API_KEY}
+    if cached_result is not None:
+        if cached_result.get("status") != "queued":
+            return cached_result
+        analysis_id = cached_result.get("analysis_id")
+        if not analysis_id:
+            return cached_result
+        polled = _poll_analysis(analysis_id, headers)
+        if polled.get("status") != "queued":
+            _store_cached(normalized, polled)
+        return polled
     encoded_url = _encode_url(normalized)
 
     try:
@@ -274,7 +304,9 @@ def check_virustotal(url):
             timeout=REQUEST_TIMEOUT,
         )
         if submit.status_code in (200, 201):
+            analysis_id = submit.json().get("data", {}).get("id")
             result = _empty_result(None, "queued")
+            result["analysis_id"] = analysis_id
             _store_cached(normalized, result)
             return result
         if submit.status_code == 401:
