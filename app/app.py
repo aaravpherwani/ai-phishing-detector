@@ -195,41 +195,47 @@ if analyze_btn:
     # ── Risk scoring ─────────────────────────────────────────────────────────
     # Three independent signal components, each /10.
     # Confidence is computed separately by the ML model trained on real emails.
-    kw      = scores["keyword_score"]
-    us      = scores["url_score"]
-    vts     = scores["vt_score"]
-    kw_norm = round(min(kw / 2, 10), 1)
+    kw = scores["keyword_score"]
+    us = scores["url_score"]
+    vts = scores.get("vt_score")
+    kw_norm = round(min(kw / max(scores.get("max_keyword_risk", 20), 1) * 10, 10), 1)
 
-    W_KW  = 0.30
-    W_URL = 0.40
-    W_VT  = 0.30
-    overall = round((kw_norm * W_KW) + (us * W_URL) + (vts * W_VT), 1)
+    # Renormalize the weighted score when VirusTotal has no completed report;
+    # unavailable reputation is shown as N/A, never silently treated as zero.
+    available_weight = 0.70 if vts is None else 1.0
+    weighted_total = kw_norm * 0.30 + us * 0.40
+    if vts is not None:
+        weighted_total += vts * 0.30
+    overall = round(weighted_total / available_weight, 1)
 
     sc1, sc2, sc3 = st.columns(3)
-    for col, lbl, sublbl, val in [
-        (sc1, "Language",       "30% · phishing language",    kw_norm),
-        (sc2, "URL Structure",  "40% · link manipulation",    us),
-        (sc3, "External Intel", "30% · VirusTotal vendors",   vts),
-    ]:
-        cls = _score_class(val)
+    components = [
+        (sc1, "Language", "30% · phishing language", kw_norm),
+        (sc2, "URL Structure", "40% · link manipulation", us),
+        (sc3, "External Intel", "30% · VirusTotal vendors" if vts is not None else "No completed vendor report", vts),
+    ]
+    for col, lbl, sublbl, val in components:
+        cls = _score_class(val) if val is not None else "score-low"
+        shown = f"{val}<span class=\"score-denom\">/10</span>" if val is not None else "N/A"
         with col:
             st.markdown(
                 f'<div class="score-card">'
                 f'<div class="score-label">{lbl}</div>'
-                f'<div class="score-value {cls}">{val}<span class="score-denom">/10</span></div>'
+                f'<div class="score-value {cls}">{shown}</div>'
                 f'<div class="score-sublabel">{sublbl}</div>'
                 f'</div>',
                 unsafe_allow_html=True)
+    score_note = "weighted across available signals" if vts is None else "weighted average of all three signals"
     st.caption(
-        f"Signal score {overall}/10 (weighted average of the three components above) · "
-        f"Confidence ({confidence:.0%}) is separate — computed by the ML model trained on real phishing emails."
+        f"Signal score {overall}/10 ({score_note}) · "
+        f"Confidence ({confidence:.0%}) is separate — computed by the ML model."
     )
     st.markdown(" ")
 
     # Bar chart — hidden when all zero
-    if kw_norm > 0 or us > 0 or vts > 0:
+    if kw_norm > 0 or us > 0 or (vts is not None and vts > 0):
         with st.expander("📊 Risk Score Breakdown", expanded=True):
-            base_formula = f"Language {kw_norm}/10 (30%) + URL Structure {us}/10 (40%) + External Intel {vts}/10 (30%) = Signal score {overall}/10"
+            base_formula = f"Language {kw_norm}/10 + URL Structure {us}/10" + (f" + External Intel {vts}/10" if vts is not None else " + External Intel unavailable") + f" = Signal score {overall}/10 (available weights renormalized)"
             if ai_adjusted:
                 ai_conf_pct = round(float(ai_result.get("confidence", 0)) * 100)
                 base_formula += f"\nML confidence: {conf_pre_ai:.0%} → {confidence:.0%} after AI agreement ({ai_conf_pct}% AI confidence, 40% weight)"
@@ -237,8 +243,11 @@ if analyze_btn:
             import matplotlib.pyplot as plt
             fig, ax = plt.subplots(figsize=(5, 1.4))
             fig.patch.set_alpha(0)
-            categories = ["Language\n(30%)", "URL Structure\n(40%)", "External Intel\n(30%)"]
-            values     = [kw_norm, us, vts]
+            categories = ["Language\n(30%)", "URL Structure\n(40%)"]
+            values = [kw_norm, us]
+            if vts is not None:
+                categories.append("External Intel\n(30%)")
+                values.append(vts)
             colors     = [
                 "#ff4444" if v >= 6 else "#ffaa00" if v >= 3 else "#00dd44"
                 for v in values

@@ -1,6 +1,7 @@
 """Threat scoring and explainability for PhishGuard."""
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 import joblib
 from scipy.sparse import csr_matrix, hstack
@@ -169,6 +170,8 @@ def generate_rule_explanations(text, keyword_score, url_score, vt_results):
             explanations.append("ℹ️ VirusTotal scan skipped: this URL did not meet the high-risk scan threshold.")
         elif result["error"] == "no_key":
             explanations.append("ℹ️ VirusTotal check skipped (no API key).")
+        elif result["error"] == "insufficient_votes":
+            explanations.append("ℹ️ VirusTotal returned no usable vendor votes; reputation is inconclusive.")
         elif result["error"]:
             explanations.append(f"⚠️ VirusTotal check unavailable: {result['error']}.")
         elif result["status"] == "queued":
@@ -257,18 +260,50 @@ def predict_message(text: str):
     keyword_score, url_score = features["keyword_score"], features["url_score"]
     urls, url_analyses = extract_urls(text), get_url_analysis(text)
     analyses = {item["raw_url"]: item for item in url_analyses}
-    vt_results, total_vt_score, scans_used = [], 0, 0
-    for url in urls:
-        analysis = analyses.get(url)
-        if analysis and scans_used < MAX_VIRUSTOTAL_SCANS_PER_MESSAGE and should_scan_url(analysis, keyword_score):
-            result = check_virustotal(url)
-            scans_used += 1
-        else:
-            result = {"score": 0, "malicious": 0, "suspicious": 0, "harmless": 0, "error": "not_scanned", "status": "skipped", "checked": False}
-        vt_results.append(result)
-        if result["error"] is None:
-            total_vt_score += result["score"]
+    # Only high-risk URLs are sent to VirusTotal, with a strict per-message cap.
+    # Independent HTTP requests run concurrently to avoid sequential latency.
+    eligible = [
+        url for url in urls
+        if analyses.get(url) and should_scan_url(analyses[url], keyword_score)
+    ][:MAX_VIRUSTOTAL_SCANS_PER_MESSAGE]
+    scans_used = len(eligible)
+    scanned = {}
+    if eligible:
+        with ThreadPoolExecutor(max_workers=min(2, len(eligible))) as executor:
+            futures = {url: executor.submit(check_virustotal, url) for url in eligible}
+            for url, future in futures.items():
+                try:
+                    scanned[url] = future.result()
+                except Exception:
+                    scanned[url] = {
+                        "score": 0.0, "malicious": 0, "suspicious": 0,
+                        "harmless": 0, "total_votes": 0,
+                        "error": "lookup_failed", "status": "error",
+                        "checked": False, "cached": False,
+                    }
 
+    vt_results = []
+    for url in urls:
+        result = scanned.get(url)
+        if result is None:
+            result = {
+                "score": 0.0, "malicious": 0, "suspicious": 0,
+                "harmless": 0, "total_votes": 0,
+                "error": "not_scanned", "status": "skipped",
+                "checked": False, "cached": False,
+            }
+        vt_results.append(result)
+
+    # Preserve the historical model-input scale while displaying a mean
+    # per-URL score only when completed vendor reports actually exist.
+    completed_vt = [
+        result for result in vt_results
+        if result.get("error") is None and result.get("checked")
+    ]
+    total_vt_score = sum(result["score"] for result in completed_vt)
+    displayed_vt_score = (
+        round(total_vt_score / len(completed_vt), 2) if completed_vt else None
+    )
     total_url_score = url_score + total_vt_score
     rule_score = keyword_score + total_url_score
     rule_explanations = generate_rule_explanations(text, keyword_score, total_url_score, vt_results)
@@ -307,7 +342,9 @@ def predict_message(text: str):
     explainability = build_explainability(text, label, keyword_score, total_url_score, url_analyses, vt_results)
     scores = {
         "keyword_score": keyword_score, "max_keyword_risk": MAX_KEYWORD_RISK,
-        "url_score": min(url_score, 10), "vt_score": min(total_vt_score, 10),
+        "url_score": min(url_score, 10), "vt_score": displayed_vt_score,
+        "vt_available": displayed_vt_score is not None,
+        "vt_completed_urls": len(completed_vt),
         "confidence_pre_ai": confidence_before_ai, "ai_adjusted": ai_adjusted,
         "model_source": model_source, "virustotal_scans_used": scans_used,
         "ensemble": ensemble, "explainability": explainability,

@@ -103,13 +103,24 @@ if st.button("⚡ Analyze Threat", type="primary"):
     st.markdown(f'<div class="verdict {"danger" if label == "PHISHING" else "safe"}">{"⚠️ PHISHING DETECTED" if label == "PHISHING" else "✅ SAFE"} · {confidence:.0%} confidence{delta}</div>', unsafe_allow_html=True)
 
     max_keyword_risk = scores["max_keyword_risk"]
-    language = round(min(scores["keyword_score"] / max_keyword_risk * 10, 10), 1)
-    url, intel = scores["url_score"], scores["vt_score"]
-    overall = round(language * .30 + url * .40 + intel * .30, 1)
+    language = round(min(scores["keyword_score"] / max(max_keyword_risk, 1) * 10, 10), 1)
+    url, intel = scores["url_score"], scores.get("vt_score")
+    available_weight = 0.70 if intel is None else 1.0
+    weighted_total = language * .30 + url * .40
+    if intel is not None:
+        weighted_total += intel * .30
+    overall = round(weighted_total / available_weight, 1)
     columns = st.columns(3)
-    for column, name, subtitle, value in ((columns[0], "Language", f"30% · max risk {max_keyword_risk}", language), (columns[1], "URL Structure", "40% · link manipulation", url), (columns[2], "External Intel", "30% · VirusTotal vendors", intel)):
-        column.markdown(f'<div class="card"><div class="label">{name}</div><div class="value {score_style(value)}">{value}<span style="font-size:.9rem;color:#777">/10</span></div><div class="label">{subtitle}</div></div>', unsafe_allow_html=True)
-    st.caption(f"Signal score {overall}/10 is separate from confidence ({confidence:.0%}), which comes from the trained classifier.")
+    components = (
+        (columns[0], "Language", f"30% · max risk {max_keyword_risk}", language),
+        (columns[1], "URL Structure", "40% · link manipulation", url),
+        (columns[2], "External Intel", "30% · VirusTotal vendors" if intel is not None else "No completed vendor report", intel),
+    )
+    for column, name, subtitle, value in components:
+        shown = f"{value}<span style='font-size:.9rem;color:#777'>/10</span>" if value is not None else "N/A"
+        column.markdown(f'<div class="card"><div class="label">{name}</div><div class="value {score_style(value) if value is not None else "low"}">{shown}</div><div class="label">{subtitle}</div></div>', unsafe_allow_html=True)
+    score_note = "available signals only; weights renormalized" if intel is None else "all three signals"
+    st.caption(f"Signal score {overall}/10 ({score_note}) is separate from confidence ({confidence:.0%}), which comes from the trained classifier.")
 
     explain = scores["explainability"]
     with st.expander("🔎 Model Explainability", expanded=True):
