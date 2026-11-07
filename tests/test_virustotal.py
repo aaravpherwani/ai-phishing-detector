@@ -30,3 +30,13 @@ def test_zero_vote_report_is_not_treated_as_clean():
     assert result["error"] == "insufficient_votes"
     assert result["checked"] is True
     assert result["total_votes"] == 0
+
+
+
+def test_six_malicious_and_fifty_nine_harmless_votes_score_ratio():
+    result = _result_from_stats({
+        "malicious": 6, "suspicious": 0, "harmless": 59,
+    })
+    assert result["total_votes"] == 65
+    assert result["score"] == 0.92
+    assert result["status"] == "mixed"
