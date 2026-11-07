@@ -160,10 +160,13 @@ def generate_rule_explanations(text, keyword_score, url_score, vt_results):
     phrases = _matched_risk_phrases(text)
     for item in phrases:
         explanations.append(f"⚠️ {item['category'].title()}: “{item['phrase']}”.")
+    shortened_urls = {
+        item["raw_url"] for item in get_url_analysis(text) if item.get("is_shortened")
+    }
     for index, original_url in enumerate(extract_urls(text)):
         normalized = normalize_url(original_url)
         explanations.extend([f"🔗 URL detected: {normalized}", f"🌐 Domain: {extract_domain(normalized)}"])
-        if index < len(get_url_analysis(text)) and get_url_analysis(text)[index].get("is_shortened"):
+        if original_url in shortened_urls:
             explanations.append("⚠️ This shortened link hides its final destination; treat the destination as unknown.")
         if index >= len(vt_results):
             continue
