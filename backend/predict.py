@@ -163,6 +163,8 @@ def generate_rule_explanations(text, keyword_score, url_score, vt_results):
     for index, original_url in enumerate(extract_urls(text)):
         normalized = normalize_url(original_url)
         explanations.extend([f"🔗 URL detected: {normalized}", f"🌐 Domain: {extract_domain(normalized)}"])
+        if index < len(get_url_analysis(text)) and get_url_analysis(text)[index].get("is_shortened"):
+            explanations.append("⚠️ This shortened link hides its final destination; treat the destination as unknown.")
         if index >= len(vt_results):
             continue
         result = vt_results[index]
@@ -283,10 +285,22 @@ def predict_message(text: str):
     analyses = {item["raw_url"]: item for item in url_analyses}
     # Only high-risk URLs are sent to VirusTotal, with a strict per-message cap.
     # Independent HTTP requests run concurrently to avoid sequential latency.
-    eligible = [
+    eligible_candidates = [
         url for url in urls
         if analyses.get(url) and should_scan_url(analyses[url], keyword_score)
-    ][:MAX_VIRUSTOTAL_SCANS_PER_MESSAGE]
+    ]
+    def _scan_priority(url):
+        item = analyses[url]
+        return (
+            5 * bool(item.get("uses_ip"))
+            + 5 * bool(item.get("brand_spoof"))
+            + 3 * bool(item.get("suspicious_tld"))
+            + 3 * bool(item.get("is_shortened"))
+            + 2 * bool(item.get("many_subdomains"))
+            + 2 * bool(item.get("has_at_symbol"))
+            + 2 * bool(item.get("has_hex_encoding"))
+        )
+    eligible = sorted(eligible_candidates, key=_scan_priority, reverse=True)[:MAX_VIRUSTOTAL_SCANS_PER_MESSAGE]
     scans_used = len(eligible)
     scanned = {}
     if eligible:
