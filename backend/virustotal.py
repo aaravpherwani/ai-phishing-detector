@@ -200,7 +200,7 @@ def _result_from_stats(stats):
     total_votes = malicious + suspicious + harmless
 
     if total_votes == 0:
-        result = _empty_result(None, "insufficient")
+        result = _empty_result("insufficient_votes", "insufficient")
         result.update({
             "checked": True,
             "malicious": malicious,
