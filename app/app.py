@@ -16,7 +16,8 @@ try:
 except Exception:
     GEMINI_KEY_SET = bool(os.getenv("GEMINI_API_KEY"))
 
-st.set_page_config(page_title="PhishGuard AI", page_icon="🛡️", layout="wide")
+LOGO_URL = "https://www.image2url.com/r2/default/images/1794075978712-bdfa62a3-45fe-4179-8b1a-677df8175818.png"
+st.set_page_config(page_title="PhishGuard AI", page_icon=LOGO_URL, layout="wide")
 
 st.markdown("""
 <style>
@@ -130,7 +131,11 @@ def _score_class(val, max_val=10):
 
 # ═══════════════════════════ UI ═══════════════════════════════════════════════
 
-st.markdown("## 🛡️ PhishGuard AI")
+logo_col, title_col = st.columns([0.08, 0.92], vertical_alignment="center")
+with logo_col:
+    st.image(LOGO_URL, width=52)
+with title_col:
+    st.markdown("## PhishGuard AI")
 st.markdown("<span style='color:#555; font-size:0.9rem;'>Multi-layer threat analysis · ML + rule engine + VirusTotal + Gemini AI</span>", unsafe_allow_html=True)
 st.markdown("---")
 
